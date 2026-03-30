@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BG Remover — Remove Image Backgrounds Free</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#0d0d12;--surface:#15151e;--surface2:#1c1c28;--border:#2a2a3a;
+      --purple:#7c6af7;--purple2:#534AB7;--green:#2d9e6b;--green2:#1f7a50;
+      --text:#e2e2e8;--muted:#888;--dim:#444;
+    }
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:3rem 1rem 4rem}
+
+    /* ── Hero ── */
+    .hero{text-align:center;margin-bottom:2.5rem}
+    .hero h1{font-size:2rem;font-weight:700;letter-spacing:-.5px;margin-bottom:.4rem}
+    .hero h1 span{color:var(--purple)}
+    .hero p{color:var(--muted);font-size:.92rem}
+
+    /* ── Card ── */
+    .card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:2rem}
+
+    /* ── Key setup step ── */
+    .step{background:var(--surface2);border:1px solid #3a2f5a;border-radius:12px;padding:1.1rem 1.2rem;margin-bottom:1.5rem}
+    .step-head{display:flex;align-items:center;gap:10px;margin-bottom:.75rem}
+    .step-num{width:24px;height:24px;border-radius:50%;background:var(--purple);display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;flex-shrink:0}
+    .step-head strong{font-size:.88rem;color:#ccc}
+    .step p{font-size:.8rem;color:var(--muted);line-height:1.65;margin-bottom:.7rem}
+    .step a{color:var(--purple);font-weight:600;text-decoration:none}
+    .step a:hover{text-decoration:underline}
+    .key-row{display:flex;gap:8px}
+    .key-row input{flex:1;background:var(--bg);color:#ccc;border:1px solid var(--border);border-radius:8px;padding:.45rem .8rem;font-size:.82rem;font-family:monospace}
+    .key-row input:focus{outline:none;border-color:var(--purple)}
+    .key-row input.saved{border-color:var(--green)}
+    .btn-save{padding:.45rem 1rem;background:var(--purple2);color:#fff;border:none;border-radius:8px;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s;white-space:nowrap}
+    .btn-save:hover{background:var(--purple)}
+    #keyMsg{font-size:.75rem;margin-top:.45rem;min-height:1rem}
+    #keyMsg.ok{color:#5dcaa5}
+    #keyMsg.err{color:#e08090}
+
+    /* ── Drop zone ── */
+    .drop-zone{border:1.5px dashed var(--dim);border-radius:14px;padding:2.75rem 1.5rem;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--bg);position:relative}
+    .drop-zone:hover,.drop-zone.over{border-color:var(--purple);background:#100e1c}
+    .dz-circle{width:58px;height:58px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 1rem}
+    .drop-zone h2{font-size:.95rem;font-weight:500;color:#d0d0e0;margin-bottom:4px}
+    .drop-zone p{font-size:.78rem;color:var(--muted)}
+    .browse{color:#a89fff;text-decoration:underline;cursor:pointer}
+    #fileInput{display:none}
+
+    /* ── Divider ── */
+    .or{display:flex;align-items:center;gap:10px;margin:1rem 0}
+    .or hr{flex:1;border:none;border-top:1px solid #222230}
+    .or span{font-size:.72rem;color:var(--dim)}
+
+    /* ── Buttons ── */
+    .btn-choose{width:100%;padding:.68rem;background:var(--surface2);color:#bbb;border:1px solid var(--border);border-radius:10px;font-size:.88rem;cursor:pointer;transition:background .15s,border-color .15s}
+    .btn-choose:hover{background:#22223a;border-color:var(--purple);color:#fff}
+
+    /* ── File row ── */
+    .file-row{display:none;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:.6rem 1rem;margin-top:.9rem}
+    .fi{font-size:20px;flex-shrink:0}
+    .fi-info{flex:1;min-width:0}
+    .fi-name{font-size:.82rem;font-weight:500;color:#d0d0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .fi-size{font-size:.72rem;color:var(--muted)}
+    .btn-x{background:none;border:none;cursor:pointer;color:var(--dim);font-size:15px;padding:4px;line-height:1}
+    .btn-x:hover{color:#e07070}
+
+    /* ── Process button ── */
+    .btn-go{display:none;width:100%;padding:.75rem;background:var(--green);color:#fff;border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;margin-top:.9rem;transition:background .15s;letter-spacing:.2px}
+    .btn-go:hover{background:var(--green2)}
+    .btn-go:disabled{background:#1a5a3e;color:#556;cursor:not-allowed}
+
+    /* ── Progress ── */
+    .prog-wrap{display:none;background:var(--bg);border-radius:6px;height:6px;overflow:hidden;margin-top:.8rem}
+    .prog-bar{height:100%;width:0%;background:var(--purple);transition:width .4s}
+
+    #status{margin-top:.75rem;font-size:.8rem;color:#9d8fff;min-height:1.1rem;text-align:center}
+
+    .err-box{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;padding:.75rem 1rem;margin-top:.9rem;font-size:.8rem;color:#e08090;line-height:1.65}
+
+    /* ── Badges ── */
+    .badges{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.25rem}
+    .badge{font-size:.68rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;color:var(--dim);background:#0d0d14}
+
+    /* ── Result ── */
+    .result{display:none;margin-top:1.75rem;width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:1.5rem;text-align:center}
+    .result p{font-size:.8rem;color:var(--muted);margin-bottom:.9rem}
+    #outImg{max-width:100%;border-radius:12px;border:1px solid var(--border);background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
+    .btn-dl{display:inline-block;margin-top:1.1rem;padding:.6rem 2rem;background:var(--green);color:#fff;border:none;border-radius:8px;font-size:.88rem;font-weight:700;cursor:pointer;text-decoration:none;transition:background .15s}
+    .btn-dl:hover{background:var(--green2)}
+
+    /* ── Footer ── */
+    footer{margin-top:3rem;font-size:.75rem;color:var(--dim);text-align:center;line-height:1.8}
+    footer a{color:var(--dim)}
+  </style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>&#127924; BG <span>Remover</span></h1>
+  <p>Remove image backgrounds instantly &mdash; free, no install, works in any browser</p>
+</div>
+
+<div class="card">
+
+  <!-- Step 1: API key -->
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">1</div>
+      <strong>Get your free API key (one time only)</strong>
+    </div>
+    <p>
+      This tool uses <a href="https://www.remove.bg/api" target="_blank">remove.bg</a> for AI background removal.
+      Sign up free &rarr; you get <strong>50 free images/month</strong>, no credit card needed.
+    </p>
+    <div class="key-row">
+      <input type="password" id="keyInput" placeholder="Paste your remove.bg API key here" autocomplete="off"/>
+      <button class="btn-save" id="btnSave">Save key</button>
+    </div>
+    <div id="keyMsg"></div>
+  </div>
+
+  <!-- Step 2: Upload -->
+  <div class="drop-zone" id="dropZone">
+    <div class="dz-circle">&#128247;</div>
+    <h2>Drop your image here</h2>
+    <p>or <span class="browse" id="browse">click to browse</span></p>
+    <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/bmp"/>
+  </div>
+
+  <div class="or"><hr><span>or</span><hr></div>
+  <button class="btn-choose" id="btnChoose">&#128193; Choose image file</button>
+
+  <div class="file-row" id="fileRow">
+    <span class="fi">&#128444;</span>
+    <div class="fi-info">
+      <div class="fi-name" id="fName"></div>
+      <div class="fi-size" id="fSize"></div>
+    </div>
+    <button class="btn-x" id="btnX">&#10005;</button>
+  </div>
+
+  <button class="btn-go" id="btnGo">&#10024; Remove Background</button>
+
+  <div class="prog-wrap" id="progWrap"><div class="prog-bar" id="progBar"></div></div>
+  <p id="status"></p>
+  <div class="err-box" id="errBox"></div>
+
+  <div class="badges">
+    <span class="badge">PNG</span><span class="badge">JPG</span>
+    <span class="badge">WEBP</span><span class="badge">BMP</span>
+    <span class="badge">50 free / month</span>
+    <span class="badge">No install</span>
+  </div>
+
+</div>
+
+<div class="result" id="result">
+  <p>&#9989; Background removed &mdash; transparent PNG ready</p>
+  <img id="outImg" alt="Result"/>
+  <br>
+  <a id="dlLink" class="btn-dl" download="nobg.png">&#8659; Download PNG</a>
+</div>
+
+<footer>
+  Powered by <a href="https://www.remove.bg" target="_blank">remove.bg</a> API &nbsp;&middot;&nbsp;
+  Your API key is stored only in your browser &nbsp;&middot;&nbsp;
+  <a href="https://github.com/HP980322/bg-remover" target="_blank">GitHub</a>
+</footer>
+
+<script>
+  // ── API key ─────────────────────────────────────────────────────────────
+  const keyInput = document.getElementById('keyInput');
+  const btnSave  = document.getElementById('btnSave');
+  const keyMsg   = document.getElementById('keyMsg');
+  let apiKey = localStorage.getItem('rmbg_key') || '';
+
+  if (apiKey) {
+    keyInput.value = apiKey;
+    keyInput.classList.add('saved');
+    keyMsg.textContent = '✓ Key saved — ready to use!';
+    keyMsg.className = 'ok';
+  }
+
+  btnSave.onclick = () => {
+    const v = keyInput.value.trim();
+    if (!v) { keyMsg.textContent = 'Please paste a key first.'; keyMsg.className = 'err'; return; }
+    apiKey = v;
+    localStorage.setItem('rmbg_key', v);
+    keyInput.classList.add('saved');
+    keyMsg.textContent = '✓ Key saved — ready to use!';
+    keyMsg.className = 'ok';
+  };
+
+  // ── File handling ────────────────────────────────────────────────────────
+  const dropZone = document.getElementById('dropZone');
+  const fileInput= document.getElementById('fileInput');
+  const browse   = document.getElementById('browse');
+  const btnChoose= document.getElementById('btnChoose');
+  const fileRow  = document.getElementById('fileRow');
+  const fName    = document.getElementById('fName');
+  const fSize    = document.getElementById('fSize');
+  const btnX     = document.getElementById('btnX');
+  const btnGo    = document.getElementById('btnGo');
+  const progWrap = document.getElementById('progWrap');
+  const progBar  = document.getElementById('progBar');
+  const status   = document.getElementById('status');
+  const errBox   = document.getElementById('errBox');
+  const result   = document.getElementById('result');
+  const outImg   = document.getElementById('outImg');
+  const dlLink   = document.getElementById('dlLink');
+  let file = null;
+
+  const open = () => fileInput.click();
+  browse.onclick  = e => { e.stopPropagation(); open(); };
+  btnChoose.onclick = open;
+  dropZone.onclick  = open;
+  fileInput.onchange = () => pick(fileInput.files[0]);
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+  dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('over'); pick(e.dataTransfer.files[0]); });
+
+  function pick(f) {
+    if (!f) return;
+    file = f;
+    fName.textContent = f.name;
+    fSize.textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
+    fileRow.style.display = 'flex';
+    btnGo.style.display = 'block';
+    result.style.display = 'none';
+    errBox.style.display = 'none';
+    status.textContent = '';
+    progBar.style.width = '0%';
+    progWrap.style.display = 'none';
+  }
+
+  btnX.onclick = e => {
+    e.stopPropagation();
+    file = null; fileInput.value = '';
+    fileRow.style.display = 'none';
+    btnGo.style.display = 'none';
+    status.textContent = '';
+    errBox.style.display = 'none';
+  };
+
+  // ── Remove BG ────────────────────────────────────────────────────────────
+  btnGo.onclick = async () => {
+    if (!file) return;
+    if (!apiKey) {
+      errBox.textContent = '⚠ Please paste your remove.bg API key above and click Save key.';
+      errBox.style.display = 'block'; return;
+    }
+
+    btnGo.disabled = true;
+    btnGo.textContent = 'Processing…';
+    errBox.style.display = 'none';
+    status.textContent = 'Sending to remove.bg AI…';
+    progWrap.style.display = 'block';
+    progBar.style.width = '12%';
+
+    let pct = 12;
+    const tick = setInterval(() => { if (pct < 78) { pct += 4; progBar.style.width = pct + '%'; } }, 500);
+
+    try {
+      const fd = new FormData();
+      fd.append('image_file', file);
+      fd.append('size', 'auto');
+
+      const res = await fetch('https://api.remove.bg/v1.0/removebg', {
+        method: 'POST',
+        headers: { 'X-Api-Key': apiKey },
+        body: fd,
+      });
+
+      clearInterval(tick);
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.errors?.[0]?.title || `Error ${res.status}`);
+      }
+
+      progBar.style.width = '100%';
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const stem = file.name.replace(/\.[^.]+$/, '');
+
+      outImg.src = url;
+      dlLink.href = url;
+      dlLink.download = stem + '_nobg.png';
+      result.style.display = 'block';
+      result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      status.textContent = '✅ Done!';
+
+    } catch (err) {
+      clearInterval(tick);
+      progBar.style.width = '0%';
+      status.textContent = '';
+      errBox.textContent = '❌ ' + err.message;
+      errBox.style.display = 'block';
+    } finally {
+      btnGo.disabled = false;
+      btnGo.textContent = '✨ Remove Background';
+    }
+  };
+</script>
+</body>
+</html>
