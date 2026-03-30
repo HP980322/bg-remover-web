@@ -24,44 +24,40 @@
     .card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);
       border-radius:20px;padding:2rem}
 
-    /* model status box */
     .model-bar{border:1px solid var(--border);border-radius:12px;padding:1rem 1.2rem;
-      margin-bottom:1.5rem;font-size:.82rem;color:var(--muted);text-align:center;
-      background:var(--surface2)}
+      margin-bottom:1.5rem;font-size:.82rem;color:var(--muted);text-align:center;background:var(--surface2)}
     .mb-label{margin-bottom:.6rem;font-size:.85rem}
     .mb-track{background:var(--bg);border-radius:6px;height:7px;overflow:hidden}
     .mb-fill{height:100%;width:0%;background:var(--purple);transition:width .3s}
     .mb-sub{font-size:.72rem;color:var(--dim);margin-top:.5rem}
-    .btn-retry{display:none;margin-top:.75rem;padding:.45rem 1.4rem;
-      background:#3a2060;color:#c0a8ff;border:1px solid #6040a0;
-      border-radius:8px;font-size:.8rem;cursor:pointer;transition:background .15s}
+    .btn-retry{display:none;margin-top:.75rem;padding:.45rem 1.4rem;background:#3a2060;
+      color:#c0a8ff;border:1px solid #6040a0;border-radius:8px;font-size:.8rem;cursor:pointer}
     .btn-retry:hover{background:#4a2878}
 
-    /* drop zone */
-    .drop-zone{border:1.5px dashed var(--dim);border-radius:14px;padding:2.75rem 1.5rem;
+    .drop-zone{border:1.5px dashed var(--dim);border-radius:14px;padding:2.5rem 1.5rem;
       text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--bg)}
     .drop-zone:hover,.drop-zone.over{border-color:var(--purple);background:#100e1c}
     .drop-zone.disabled{pointer-events:none;opacity:.4}
-    .dz-circle{width:58px;height:58px;border-radius:50%;background:var(--surface2);
+    .dz-circle{width:54px;height:54px;border-radius:50%;background:var(--surface2);
       border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
-      font-size:24px;margin:0 auto 1rem}
-    .drop-zone h2{font-size:.95rem;font-weight:500;color:#d0d0e0;margin-bottom:4px}
+      font-size:22px;margin:0 auto .85rem}
+    .drop-zone h2{font-size:.92rem;font-weight:500;color:#d0d0e0;margin-bottom:4px}
     .drop-zone p{font-size:.78rem;color:var(--muted)}
     .browse{color:#a89fff;text-decoration:underline;cursor:pointer}
     #fileInput{display:none}
 
-    .or{display:flex;align-items:center;gap:10px;margin:1rem 0}
+    .or{display:flex;align-items:center;gap:10px;margin:.9rem 0}
     .or hr{flex:1;border:none;border-top:1px solid #222230}
     .or span{font-size:.72rem;color:var(--dim)}
 
-    .btn-choose{width:100%;padding:.68rem;background:var(--surface2);color:#bbb;
+    .btn-choose{width:100%;padding:.65rem;background:var(--surface2);color:#bbb;
       border:1px solid var(--border);border-radius:10px;font-size:.88rem;cursor:pointer;
       transition:background .15s,border-color .15s}
     .btn-choose:hover{background:#22223a;border-color:var(--purple);color:#fff}
     .btn-choose:disabled{opacity:.4;cursor:not-allowed}
 
     .file-row{display:none;align-items:center;gap:10px;background:var(--surface2);
-      border:1px solid var(--border);border-radius:10px;padding:.6rem 1rem;margin-top:.9rem}
+      border:1px solid var(--border);border-radius:10px;padding:.6rem 1rem;margin-top:.85rem}
     .fi{font-size:20px;flex-shrink:0}
     .fi-info{flex:1;min-width:0}
     .fi-name{font-size:.82rem;font-weight:500;color:#d0d0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -69,28 +65,35 @@
     .btn-x{background:none;border:none;cursor:pointer;color:var(--dim);font-size:15px;padding:4px}
     .btn-x:hover{color:#e07070}
 
-    .btn-go{display:none;width:100%;padding:.78rem;background:var(--green);color:#fff;
+    /* threshold slider */
+    .threshold-row{display:none;align-items:center;gap:10px;margin-top:.85rem}
+    .threshold-row label{font-size:.78rem;color:var(--muted);white-space:nowrap}
+    .threshold-row input[type=range]{flex:1;accent-color:var(--purple)}
+    .threshold-val{font-size:.78rem;color:#a89fff;min-width:28px;text-align:right}
+
+    .btn-go{display:none;width:100%;padding:.75rem;background:var(--green);color:#fff;
       border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
-      margin-top:.9rem;transition:background .15s}
+      margin-top:.85rem;transition:background .15s}
     .btn-go:hover{background:var(--green2)}
     .btn-go:disabled{background:#1a5a3e;color:#556;cursor:not-allowed}
 
     .prog-wrap{display:none;background:var(--bg);border-radius:6px;height:6px;overflow:hidden;margin-top:.8rem}
     .prog-bar{height:100%;width:0%;background:var(--purple);transition:width .3s}
-    #status{margin-top:.75rem;font-size:.8rem;color:#9d8fff;min-height:1.1rem;text-align:center}
+    #status{margin-top:.7rem;font-size:.8rem;color:#9d8fff;min-height:1.1rem;text-align:center}
     .err-box{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;
-      padding:.75rem 1rem;margin-top:.9rem;font-size:.8rem;color:#e08090;line-height:1.65}
+      padding:.75rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.65}
 
-    .badges{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.25rem}
+    .badges{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.2rem}
     .badge{font-size:.68rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;
       color:var(--dim);background:#0d0d14}
 
+    /* result */
     .result{display:none;margin-top:1.75rem;width:100%;max-width:560px;background:var(--surface);
       border:1px solid var(--border);border-radius:20px;padding:1.5rem;text-align:center}
-    .result p{font-size:.8rem;color:var(--muted);margin-bottom:.9rem}
+    .result-label{font-size:.8rem;color:var(--muted);margin-bottom:.9rem}
     #outCanvas{max-width:100%;border-radius:12px;border:1px solid var(--border);
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
-    .btn-dl{display:inline-block;margin-top:1.1rem;padding:.6rem 2rem;background:var(--green);
+    .btn-dl{display:inline-block;margin-top:1rem;padding:.6rem 2rem;background:var(--green);
       color:#fff;border:none;border-radius:8px;font-size:.88rem;font-weight:700;
       cursor:pointer;text-decoration:none;transition:background .15s}
     .btn-dl:hover{background:var(--green2)}
@@ -103,7 +106,7 @@
 
 <div class="hero">
   <h1>&#127924; BG <span>Remover</span></h1>
-  <p>Remove image backgrounds instantly &mdash; AI runs inside your browser</p>
+  <p>Remove image backgrounds instantly &mdash; AI runs entirely in your browser</p>
   <span class="free-badge">&#10003; 100% free &nbsp;&nbsp; &#10003; No sign-up &nbsp;&nbsp; &#10003; Unlimited &nbsp;&nbsp; &#10003; Private</span>
 </div>
 
@@ -135,6 +138,13 @@
     <button class="btn-x" id="btnX">&#10005;</button>
   </div>
 
+  <!-- Mask threshold slider — only shown after a file is chosen -->
+  <div class="threshold-row" id="threshRow">
+    <label for="threshSlider">Edge sensitivity</label>
+    <input type="range" id="threshSlider" min="0" max="255" value="128"/>
+    <span class="threshold-val" id="threshVal">128</span>
+  </div>
+
   <button class="btn-go" id="btnGo">&#10024; Remove Background</button>
   <div class="prog-wrap" id="progWrap"><div class="prog-bar" id="progBar"></div></div>
   <p id="status"></p>
@@ -150,7 +160,7 @@
 </div>
 
 <div class="result" id="result">
-  <p>&#9989; Background removed &mdash; transparent PNG ready</p>
+  <div class="result-label">&#9989; Background removed &mdash; transparent PNG ready</div>
   <canvas id="outCanvas"></canvas><br>
   <button class="btn-dl" id="btnDl">&#8659; Download PNG</button>
 </div>
@@ -169,30 +179,42 @@ import { AutoModel, AutoProcessor, env, RawImage }
 
 env.allowLocalModels = false;
 
-const modelBar  = document.getElementById('modelBar');
-const mbLabel   = document.getElementById('mbLabel');
-const mbFill    = document.getElementById('mbFill');
-const mbSub     = document.getElementById('mbSub');
-const btnRetry  = document.getElementById('btnRetry');
-const dropZone  = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-const browse    = document.getElementById('browse');
-const btnChoose = document.getElementById('btnChoose');
-const fileRow   = document.getElementById('fileRow');
-const fName     = document.getElementById('fName');
-const fSize     = document.getElementById('fSize');
-const btnX      = document.getElementById('btnX');
-const btnGo     = document.getElementById('btnGo');
-const progWrap  = document.getElementById('progWrap');
-const progBar   = document.getElementById('progBar');
-const status    = document.getElementById('status');
-const errBox    = document.getElementById('errBox');
-const result    = document.getElementById('result');
-const outCanvas = document.getElementById('outCanvas');
-const btnDl     = document.getElementById('btnDl');
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const modelBar    = document.getElementById('modelBar');
+const mbLabel     = document.getElementById('mbLabel');
+const mbFill      = document.getElementById('mbFill');
+const mbSub       = document.getElementById('mbSub');
+const btnRetry    = document.getElementById('btnRetry');
+const dropZone    = document.getElementById('dropZone');
+const fileInput   = document.getElementById('fileInput');
+const browse      = document.getElementById('browse');
+const btnChoose   = document.getElementById('btnChoose');
+const fileRow     = document.getElementById('fileRow');
+const fName       = document.getElementById('fName');
+const fSize       = document.getElementById('fSize');
+const btnX        = document.getElementById('btnX');
+const threshRow   = document.getElementById('threshRow');
+const threshSlider= document.getElementById('threshSlider');
+const threshVal   = document.getElementById('threshVal');
+const btnGo       = document.getElementById('btnGo');
+const progWrap    = document.getElementById('progWrap');
+const progBar     = document.getElementById('progBar');
+const status      = document.getElementById('status');
+const errBox      = document.getElementById('errBox');
+const result      = document.getElementById('result');
+const outCanvas   = document.getElementById('outCanvas');
+const btnDl       = document.getElementById('btnDl');
 
 let model = null, processor = null, file = null;
 let loadAttempt = 0;
+// Store raw mask tensor values so we can re-apply without re-running model
+let lastMaskValues = null, lastImage = null;
+
+// Threshold slider live update
+threshSlider.oninput = () => {
+  threshVal.textContent = threshSlider.value;
+  if (lastMaskValues && lastImage) applyMask(lastImage, lastMaskValues);
+};
 
 // ── Progress callback ─────────────────────────────────────────────────────────
 function onProgress(p) {
@@ -201,29 +223,25 @@ function onProgress(p) {
     mbFill.style.width = pct + '%';
     mbSub.textContent  = `Downloading… ${pct}% (${(p.loaded/1024/1024).toFixed(1)} / ${(p.total/1024/1024).toFixed(1)} MB)`;
   }
-  if (p.status === 'done') {
-    mbSub.textContent = 'Almost ready…';
-  }
+  if (p.status === 'done') mbSub.textContent = 'Almost ready…';
 }
 
-// ── Load model (with auto-retry) ──────────────────────────────────────────────
+// ── Load model ────────────────────────────────────────────────────────────────
 async function loadModel() {
   loadAttempt++;
-  model = null;
-  processor = null;
-  btnRetry.style.display = 'none';
-  mbFill.style.width = '0%';
+  model = null; processor = null;
+  btnRetry.style.display  = 'none';
+  mbFill.style.width      = '0%';
   mbFill.style.background = 'var(--purple)';
-  modelBar.style.background   = 'var(--surface2)';
-  modelBar.style.borderColor  = 'var(--border)';
-  mbLabel.style.color = '';
-  mbLabel.textContent = loadAttempt === 1
+  modelBar.style.background  = 'var(--surface2)';
+  modelBar.style.borderColor = 'var(--border)';
+  mbLabel.style.color  = '';
+  mbLabel.textContent  = loadAttempt === 1
     ? '⏳ Loading AI model for the first time…'
     : `⏳ Loading AI model (attempt ${loadAttempt})…`;
   mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever after';
 
   try {
-    // Small delay on retries to let any network hiccup settle
     if (loadAttempt > 1) await new Promise(r => setTimeout(r, 1500));
 
     model = await AutoModel.from_pretrained('briaai/RMBG-1.4', {
@@ -240,48 +258,38 @@ async function loadModel() {
       }
     });
 
-    // ✅ Success
     modelBar.style.background  = '#0f1f17';
     modelBar.style.borderColor = '#1a5a3e';
     mbLabel.textContent        = '✅ AI ready — drop an image below!';
     mbLabel.style.color        = '#5dcaa5';
     mbFill.style.background    = '#2d9e6b';
     mbFill.style.width         = '100%';
-    mbSub.textContent          = loadAttempt === 1
-      ? 'Model cached — instant on next visit'
-      : 'Model loaded successfully!';
-    btnRetry.style.display = 'none';
-
+    mbSub.textContent          = loadAttempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
+    btnRetry.style.display     = 'none';
     dropZone.classList.remove('disabled');
     btnChoose.disabled = false;
 
   } catch (err) {
     console.error('Model load failed (attempt ' + loadAttempt + '):', err);
-
-    // Auto-retry once silently, then show retry button
     if (loadAttempt === 1) {
       mbLabel.textContent = '⏳ Still loading, please wait…';
       mbSub.textContent   = 'Retrying automatically…';
       mbFill.style.width  = '0%';
       setTimeout(loadModel, 2000);
     } else {
-      mbLabel.textContent = '❌ Could not load the AI model.';
-      mbLabel.style.color = '#e08090';
-      mbSub.textContent   = 'This can happen on slow connections. Click "Try again" below.';
-      mbFill.style.width  = '0%';
-      btnRetry.style.display = 'inline-block';
+      mbLabel.textContent        = '❌ Could not load model.';
+      mbLabel.style.color        = '#e08090';
+      mbSub.textContent          = 'Slow connection? Click "Try again".';
+      mbFill.style.width         = '0%';
+      btnRetry.style.display     = 'inline-block';
     }
   }
 }
-
-// Retry button
 btnRetry.onclick = () => loadModel();
-
-// Start loading immediately
 loadModel();
 
-// ── File handling ─────────────────────────────────────────────────────────────
-const openPicker = () => fileInput.click();
+// ── File pick ─────────────────────────────────────────────────────────────────
+const openPicker  = () => fileInput.click();
 browse.onclick    = e => { e.stopPropagation(); openPicker(); };
 btnChoose.onclick = openPicker;
 dropZone.onclick  = openPicker;
@@ -297,9 +305,11 @@ dropZone.addEventListener('drop', e => {
 function pick(f) {
   if (!f) return;
   file = f;
+  lastMaskValues = null; lastImage = null;
   fName.textContent      = f.name;
   fSize.textContent      = (f.size / 1024 / 1024).toFixed(2) + ' MB';
   fileRow.style.display  = 'flex';
+  threshRow.style.display = 'flex';
   btnGo.style.display    = 'block';
   result.style.display   = 'none';
   errBox.style.display   = 'none';
@@ -311,11 +321,54 @@ function pick(f) {
 btnX.onclick = e => {
   e.stopPropagation();
   file = null; fileInput.value = '';
-  fileRow.style.display  = 'none';
-  btnGo.style.display    = 'none';
-  status.textContent     = '';
-  errBox.style.display   = 'none';
+  lastMaskValues = null; lastImage = null;
+  fileRow.style.display   = 'none';
+  threshRow.style.display = 'none';
+  btnGo.style.display     = 'none';
+  status.textContent      = '';
+  errBox.style.display    = 'none';
+  result.style.display    = 'none';
 };
+
+// ── Apply mask to canvas ──────────────────────────────────────────────────────
+// maskValues: Float32Array of values 0-1, same order as pixels (w*h values)
+// image: RawImage (has .width, .height, .data)
+function applyMask(image, maskValues) {
+  outCanvas.width  = image.width;
+  outCanvas.height = image.height;
+  const ctx = outCanvas.getContext('2d');
+
+  // Draw original
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width  = image.width;
+  tmpCanvas.height = image.height;
+  const tmpCtx = tmpCanvas.getContext('2d');
+
+  // Build ImageData from RawImage channels
+  const imgData = tmpCtx.createImageData(image.width, image.height);
+  const src = image.data;
+  const dst = imgData.data;
+  const channels = src.length / (image.width * image.height);
+
+  for (let i = 0; i < image.width * image.height; i++) {
+    if (channels >= 3) {
+      dst[i*4]   = src[i*channels];     // R
+      dst[i*4+1] = src[i*channels+1];   // G
+      dst[i*4+2] = src[i*channels+2];   // B
+    } else {
+      // grayscale
+      dst[i*4]   = src[i*channels];
+      dst[i*4+1] = src[i*channels];
+      dst[i*4+2] = src[i*channels];
+    }
+    // Apply threshold to mask: values above threshold = opaque, below = transparent
+    const threshold = parseInt(threshSlider.value) / 255;
+    const maskVal   = maskValues[i]; // 0-1 float
+    dst[i*4+3] = maskVal >= threshold ? Math.round(maskVal * 255) : 0;
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
 
 // ── Remove background ─────────────────────────────────────────────────────────
 btnGo.onclick = async () => {
@@ -335,38 +388,69 @@ btnGo.onclick = async () => {
 
   try {
     const imgUrl = URL.createObjectURL(file);
-    const image  = await RawImage.fromURL(imgUrl);
 
+    // Load as RawImage (keeps original pixel data accessible)
+    const image = await RawImage.fromURL(imgUrl);
+
+    // Pre-process & run model
     const { pixel_values } = await processor(image);
     const { output }       = await model({ input: pixel_values });
 
     clearInterval(tick);
-    progBar.style.width = '88%';
+    progBar.style.width = '85%';
 
-    const maskData = await RawImage.fromTensor(output[0].mul(255).to('uint8'))
-                                   .resize(image.width, image.height);
+    // output[0] is the mask tensor, shape [1, 1, H, W], values 0-1
+    // Squeeze to flat Float32Array of W*H values
+    const maskTensor = output[0].squeeze();              // shape [H, W]
+    const rawMask    = maskTensor.data;                  // Float32Array, 0-1
 
-    outCanvas.width  = image.width;
-    outCanvas.height = image.height;
-    const ctx  = outCanvas.getContext('2d');
-    const imgEl = new Image();
-    await new Promise((res, rej) => { imgEl.onload = res; imgEl.onerror = rej; imgEl.src = imgUrl; });
-    ctx.drawImage(imgEl, 0, 0);
+    // Resize mask from model size (1024x1024) back to original image size
+    // We do this by drawing into a temp canvas and reading back
+    const mW = maskTensor.dims[1]; // model output width
+    const mH = maskTensor.dims[0]; // model output height
 
-    const pixelData = ctx.getImageData(0, 0, image.width, image.height);
-    const rgba      = pixelData.data;
-    for (let i = 0; i < rgba.length; i += 4) {
-      rgba[i + 3] = maskData.data[i];
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width  = mW;
+    maskCanvas.height = mH;
+    const mCtx = maskCanvas.getContext('2d');
+    const mImg  = mCtx.createImageData(mW, mH);
+    for (let i = 0; i < rawMask.length; i++) {
+      const v = Math.round(rawMask[i] * 255);
+      mImg.data[i*4]   = v;
+      mImg.data[i*4+1] = v;
+      mImg.data[i*4+2] = v;
+      mImg.data[i*4+3] = 255;
     }
-    ctx.putImageData(pixelData, 0, 0);
+    mCtx.putImageData(mImg, 0, 0);
+
+    // Scale mask up to original image resolution
+    const scaledCanvas = document.createElement('canvas');
+    scaledCanvas.width  = image.width;
+    scaledCanvas.height = image.height;
+    const sCtx = scaledCanvas.getContext('2d');
+    sCtx.drawImage(maskCanvas, 0, 0, image.width, image.height);
+    const scaledMask = sCtx.getImageData(0, 0, image.width, image.height);
+
+    // Build Float32Array of 0-1 values at full image resolution
+    const maskValues = new Float32Array(image.width * image.height);
+    for (let i = 0; i < maskValues.length; i++) {
+      maskValues[i] = scaledMask.data[i*4] / 255;
+    }
+
+    // Store for threshold slider live re-apply
+    lastMaskValues = maskValues;
+    lastImage      = image;
+
+    // Apply and show result
+    applyMask(image, maskValues);
 
     progBar.style.width = '100%';
-    status.textContent  = '✅ Done!';
+    status.textContent  = '✅ Done! Adjust "Edge sensitivity" slider if needed.';
 
     btnDl.onclick = () => {
-      const a      = document.createElement('a');
-      a.download   = file.name.replace(/\.[^.]+$/, '') + '_nobg.png';
-      a.href       = outCanvas.toDataURL('image/png');
+      const a    = document.createElement('a');
+      a.download = file.name.replace(/\.[^.]+$/, '') + '_nobg.png';
+      a.href     = outCanvas.toDataURL('image/png');
       a.click();
     };
 
