@@ -24,14 +24,20 @@
     .card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);
       border-radius:20px;padding:2rem}
 
+    /* model status box */
     .model-bar{border:1px solid var(--border);border-radius:12px;padding:1rem 1.2rem;
       margin-bottom:1.5rem;font-size:.82rem;color:var(--muted);text-align:center;
       background:var(--surface2)}
-    .mb-label{margin-bottom:.6rem}
-    .mb-track{background:var(--bg);border-radius:6px;height:6px;overflow:hidden}
+    .mb-label{margin-bottom:.6rem;font-size:.85rem}
+    .mb-track{background:var(--bg);border-radius:6px;height:7px;overflow:hidden}
     .mb-fill{height:100%;width:0%;background:var(--purple);transition:width .3s}
-    .mb-sub{font-size:.72rem;color:var(--dim);margin-top:.45rem}
+    .mb-sub{font-size:.72rem;color:var(--dim);margin-top:.5rem}
+    .btn-retry{display:none;margin-top:.75rem;padding:.45rem 1.4rem;
+      background:#3a2060;color:#c0a8ff;border:1px solid #6040a0;
+      border-radius:8px;font-size:.8rem;cursor:pointer;transition:background .15s}
+    .btn-retry:hover{background:#4a2878}
 
+    /* drop zone */
     .drop-zone{border:1.5px dashed var(--dim);border-radius:14px;padding:2.75rem 1.5rem;
       text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--bg)}
     .drop-zone:hover,.drop-zone.over{border-color:var(--purple);background:#100e1c}
@@ -72,7 +78,6 @@
     .prog-wrap{display:none;background:var(--bg);border-radius:6px;height:6px;overflow:hidden;margin-top:.8rem}
     .prog-bar{height:100%;width:0%;background:var(--purple);transition:width .3s}
     #status{margin-top:.75rem;font-size:.8rem;color:#9d8fff;min-height:1.1rem;text-align:center}
-
     .err-box{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;
       padding:.75rem 1rem;margin-top:.9rem;font-size:.8rem;color:#e08090;line-height:1.65}
 
@@ -105,9 +110,10 @@
 <div class="card">
 
   <div class="model-bar" id="modelBar">
-    <div class="mb-label" id="mbLabel">&#8987; Loading AI model for the first time&hellip;</div>
+    <div class="mb-label" id="mbLabel">&#8987; Loading AI model&hellip;</div>
     <div class="mb-track"><div class="mb-fill" id="mbFill"></div></div>
     <div class="mb-sub" id="mbSub">Downloading ~175 MB once &mdash; cached in your browser forever after</div>
+    <button class="btn-retry" id="btnRetry">&#8635; Try again</button>
   </div>
 
   <div class="drop-zone disabled" id="dropZone">
@@ -130,7 +136,6 @@
   </div>
 
   <button class="btn-go" id="btnGo">&#10024; Remove Background</button>
-
   <div class="prog-wrap" id="progWrap"><div class="prog-bar" id="progBar"></div></div>
   <p id="status"></p>
   <div class="err-box" id="errBox"></div>
@@ -164,11 +169,11 @@ import { AutoModel, AutoProcessor, env, RawImage }
 
 env.allowLocalModels = false;
 
-// ── DOM refs ─────────────────────────────────────────────────────────────────
 const modelBar  = document.getElementById('modelBar');
 const mbLabel   = document.getElementById('mbLabel');
 const mbFill    = document.getElementById('mbFill');
 const mbSub     = document.getElementById('mbSub');
+const btnRetry  = document.getElementById('btnRetry');
 const dropZone  = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const browse    = document.getElementById('browse');
@@ -187,20 +192,39 @@ const outCanvas = document.getElementById('outCanvas');
 const btnDl     = document.getElementById('btnDl');
 
 let model = null, processor = null, file = null;
+let loadAttempt = 0;
 
-// ── Progress helper ───────────────────────────────────────────────────────────
+// ── Progress callback ─────────────────────────────────────────────────────────
 function onProgress(p) {
   if (p.status === 'progress' && p.total) {
     const pct = Math.round((p.loaded / p.total) * 100);
     mbFill.style.width = pct + '%';
-    mbSub.textContent = `Downloading… ${pct}%  (${(p.loaded/1024/1024).toFixed(1)} / ${(p.total/1024/1024).toFixed(1)} MB)`;
+    mbSub.textContent  = `Downloading… ${pct}% (${(p.loaded/1024/1024).toFixed(1)} / ${(p.total/1024/1024).toFixed(1)} MB)`;
+  }
+  if (p.status === 'done') {
+    mbSub.textContent = 'Almost ready…';
   }
 }
 
-// ── Load model ────────────────────────────────────────────────────────────────
+// ── Load model (with auto-retry) ──────────────────────────────────────────────
 async function loadModel() {
+  loadAttempt++;
+  model = null;
+  processor = null;
+  btnRetry.style.display = 'none';
+  mbFill.style.width = '0%';
+  mbFill.style.background = 'var(--purple)';
+  modelBar.style.background   = 'var(--surface2)';
+  modelBar.style.borderColor  = 'var(--border)';
+  mbLabel.style.color = '';
+  mbLabel.textContent = loadAttempt === 1
+    ? '⏳ Loading AI model for the first time…'
+    : `⏳ Loading AI model (attempt ${loadAttempt})…`;
+  mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever after';
+
   try {
-    mbLabel.textContent = '⏳ Loading AI model for the first time…';
+    // Small delay on retries to let any network hiccup settle
+    if (loadAttempt > 1) await new Promise(r => setTimeout(r, 1500));
 
     model = await AutoModel.from_pretrained('briaai/RMBG-1.4', {
       config: { model_type: 'custom' },
@@ -209,47 +233,62 @@ async function loadModel() {
 
     processor = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
       config: {
-        do_normalize: true,
-        do_pad: false,
-        do_rescale: true,
-        do_resize: true,
-        image_mean: [0.5, 0.5, 0.5],
-        image_std:  [1.0, 1.0, 1.0],
-        resample: 2,
-        rescale_factor: 0.00392156862745098,
+        do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+        image_mean: [0.5, 0.5, 0.5], image_std: [1.0, 1.0, 1.0],
+        resample: 2, rescale_factor: 0.00392156862745098,
         size: { width: 1024, height: 1024 },
       }
     });
 
-    // Ready!
-    modelBar.style.background   = '#0f1f17';
-    modelBar.style.borderColor  = '#1a5a3e';
-    mbLabel.textContent         = '✅ AI ready — drop an image below to get started!';
-    mbLabel.style.color         = '#5dcaa5';
-    mbFill.style.background     = '#2d9e6b';
-    mbFill.style.width          = '100%';
-    mbSub.textContent           = 'Model cached — instant on next visit';
+    // ✅ Success
+    modelBar.style.background  = '#0f1f17';
+    modelBar.style.borderColor = '#1a5a3e';
+    mbLabel.textContent        = '✅ AI ready — drop an image below!';
+    mbLabel.style.color        = '#5dcaa5';
+    mbFill.style.background    = '#2d9e6b';
+    mbFill.style.width         = '100%';
+    mbSub.textContent          = loadAttempt === 1
+      ? 'Model cached — instant on next visit'
+      : 'Model loaded successfully!';
+    btnRetry.style.display = 'none';
 
     dropZone.classList.remove('disabled');
     btnChoose.disabled = false;
 
-  } catch (e) {
-    mbLabel.textContent = '❌ Failed to load model: ' + e.message;
-    mbLabel.style.color = '#e08090';
-    console.error(e);
+  } catch (err) {
+    console.error('Model load failed (attempt ' + loadAttempt + '):', err);
+
+    // Auto-retry once silently, then show retry button
+    if (loadAttempt === 1) {
+      mbLabel.textContent = '⏳ Still loading, please wait…';
+      mbSub.textContent   = 'Retrying automatically…';
+      mbFill.style.width  = '0%';
+      setTimeout(loadModel, 2000);
+    } else {
+      mbLabel.textContent = '❌ Could not load the AI model.';
+      mbLabel.style.color = '#e08090';
+      mbSub.textContent   = 'This can happen on slow connections. Click "Try again" below.';
+      mbFill.style.width  = '0%';
+      btnRetry.style.display = 'inline-block';
+    }
   }
 }
+
+// Retry button
+btnRetry.onclick = () => loadModel();
+
+// Start loading immediately
 loadModel();
 
 // ── File handling ─────────────────────────────────────────────────────────────
 const openPicker = () => fileInput.click();
-browse.onclick    = e  => { e.stopPropagation(); openPicker(); };
+browse.onclick    = e => { e.stopPropagation(); openPicker(); };
 btnChoose.onclick = openPicker;
 dropZone.onclick  = openPicker;
 fileInput.onchange = () => pick(fileInput.files[0]);
 
 dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
-dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('over'));
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
 dropZone.addEventListener('drop', e => {
   e.preventDefault(); dropZone.classList.remove('over');
   pick(e.dataTransfer.files[0]);
@@ -258,8 +297,8 @@ dropZone.addEventListener('drop', e => {
 function pick(f) {
   if (!f) return;
   file = f;
-  fName.textContent = f.name;
-  fSize.textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
+  fName.textContent      = f.name;
+  fSize.textContent      = (f.size / 1024 / 1024).toFixed(2) + ' MB';
   fileRow.style.display  = 'flex';
   btnGo.style.display    = 'block';
   result.style.display   = 'none';
@@ -282,12 +321,12 @@ btnX.onclick = e => {
 btnGo.onclick = async () => {
   if (!file || !model || !processor) return;
 
-  btnGo.disabled      = true;
-  btnGo.textContent   = 'Processing…';
-  errBox.style.display  = 'none';
+  btnGo.disabled         = true;
+  btnGo.textContent      = 'Processing…';
+  errBox.style.display   = 'none';
   progWrap.style.display = 'block';
-  progBar.style.width = '10%';
-  status.textContent  = 'Running AI in your browser…';
+  progBar.style.width    = '10%';
+  status.textContent     = 'Running AI in your browser…';
 
   let pct = 10;
   const tick = setInterval(() => {
@@ -295,34 +334,29 @@ btnGo.onclick = async () => {
   }, 200);
 
   try {
-    // 1. Load image
     const imgUrl = URL.createObjectURL(file);
     const image  = await RawImage.fromURL(imgUrl);
 
-    // 2. Pre-process
     const { pixel_values } = await processor(image);
-
-    // 3. Run model
-    const { output } = await model({ input: pixel_values });
+    const { output }       = await model({ input: pixel_values });
 
     clearInterval(tick);
-    progBar.style.width = '85%';
+    progBar.style.width = '88%';
 
-    // 4. Post-process mask
-    const maskData = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(image.width, image.height);
+    const maskData = await RawImage.fromTensor(output[0].mul(255).to('uint8'))
+                                   .resize(image.width, image.height);
 
-    // 5. Composite onto canvas
     outCanvas.width  = image.width;
     outCanvas.height = image.height;
-    const ctx     = outCanvas.getContext('2d');
-    const imgEl   = new Image();
+    const ctx  = outCanvas.getContext('2d');
+    const imgEl = new Image();
     await new Promise((res, rej) => { imgEl.onload = res; imgEl.onerror = rej; imgEl.src = imgUrl; });
     ctx.drawImage(imgEl, 0, 0);
 
     const pixelData = ctx.getImageData(0, 0, image.width, image.height);
     const rgba      = pixelData.data;
     for (let i = 0; i < rgba.length; i += 4) {
-      rgba[i + 3] = maskData.data[i]; // apply mask as alpha
+      rgba[i + 3] = maskData.data[i];
     }
     ctx.putImageData(pixelData, 0, 0);
 
@@ -330,9 +364,9 @@ btnGo.onclick = async () => {
     status.textContent  = '✅ Done!';
 
     btnDl.onclick = () => {
-      const a = document.createElement('a');
-      a.download = file.name.replace(/\.[^.]+$/, '') + '_nobg.png';
-      a.href = outCanvas.toDataURL('image/png');
+      const a      = document.createElement('a');
+      a.download   = file.name.replace(/\.[^.]+$/, '') + '_nobg.png';
+      a.href       = outCanvas.toDataURL('image/png');
       a.click();
     };
 
