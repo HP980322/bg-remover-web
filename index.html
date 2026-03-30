@@ -24,54 +24,76 @@
     .card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);
       border-radius:20px;padding:2rem}
 
-    .drop-zone{border:1.5px dashed var(--dim);border-radius:14px;padding:2.75rem 1.5rem;
-      text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--bg)}
-    .drop-zone:hover,.drop-zone.over{border-color:var(--purple);background:#100e1c}
+    /* The entire upload area is ONE <label for="fileInput">
+       Clicking anywhere on it reliably opens the file picker — no JS needed */
+    .upload-label{
+      display:block;border:1.5px dashed var(--dim);border-radius:14px;
+      padding:2.75rem 1.5rem;text-align:center;cursor:pointer;
+      transition:border-color .15s,background .15s;background:var(--bg);
+      user-select:none;
+    }
+    .upload-label:hover{border-color:var(--purple);background:#100e1c}
+    .upload-label.over{border-color:var(--purple);background:#100e1c}
     .dz-circle{width:58px;height:58px;border-radius:50%;background:var(--surface2);
       border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
-      font-size:24px;margin:0 auto 1rem}
-    .drop-zone h2{font-size:.95rem;font-weight:500;color:#d0d0e0;margin-bottom:4px}
-    .drop-zone p{font-size:.78rem;color:var(--muted)}
-    .browse{color:#a89fff;text-decoration:underline;cursor:pointer}
-    #fileInput{display:none}
+      font-size:24px;margin:0 auto 1rem;pointer-events:none}
+    .upload-label h2{font-size:.95rem;font-weight:500;color:#d0d0e0;margin-bottom:4px;pointer-events:none}
+    .upload-label p{font-size:.78rem;color:var(--muted);pointer-events:none}
 
+    /* Hide the real input but keep it accessible */
+    #fileInput{
+      position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;
+      clip:rect(0,0,0,0);white-space:nowrap;
+    }
+
+    /* "Or" divider */
     .or{display:flex;align-items:center;gap:10px;margin:1rem 0}
     .or hr{flex:1;border:none;border-top:1px solid #222230}
     .or span{font-size:.72rem;color:var(--dim)}
 
-    .btn-choose{width:100%;padding:.68rem;background:var(--surface2);color:#bbb;
+    /* Second pick button — also a <label> */
+    .pick-label{
+      display:block;width:100%;padding:.72rem;background:var(--surface2);color:#bbb;
       border:1px solid var(--border);border-radius:10px;font-size:.88rem;cursor:pointer;
-      transition:background .15s,border-color .15s}
-    .btn-choose:hover{background:#22223a;border-color:var(--purple);color:#fff}
+      text-align:center;transition:background .15s,border-color .15s;user-select:none;
+    }
+    .pick-label:hover{background:#22223a;border-color:var(--purple);color:#fff}
 
+    /* Selected file row */
     .file-row{display:none;align-items:center;gap:10px;background:var(--surface2);
       border:1px solid var(--border);border-radius:10px;padding:.6rem 1rem;margin-top:.9rem}
     .fi{font-size:20px;flex-shrink:0}
     .fi-info{flex:1;min-width:0}
-    .fi-name{font-size:.82rem;font-weight:500;color:#d0d0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .fi-name{font-size:.82rem;font-weight:500;color:#d0d0e0;white-space:nowrap;
+      overflow:hidden;text-overflow:ellipsis}
     .fi-size{font-size:.72rem;color:var(--muted)}
     .btn-x{background:none;border:none;cursor:pointer;color:var(--dim);font-size:15px;padding:4px}
     .btn-x:hover{color:#e07070}
 
+    /* Remove button */
     .btn-go{display:none;width:100%;padding:.78rem;background:var(--green);color:#fff;
       border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
       margin-top:.9rem;transition:background .15s}
     .btn-go:hover{background:var(--green2)}
     .btn-go:disabled{background:#1a5a3e;color:#556;cursor:not-allowed}
 
-    .prog-wrap{display:none;background:var(--bg);border-radius:6px;height:7px;overflow:hidden;margin-top:.85rem}
+    /* Progress */
+    .prog-wrap{display:none;background:var(--bg);border-radius:6px;height:7px;
+      overflow:hidden;margin-top:.85rem}
     .prog-bar{height:100%;width:0%;background:var(--purple);transition:width .4s}
-
     #status{margin-top:.75rem;font-size:.82rem;color:#9d8fff;min-height:1.2rem;text-align:center}
     .err-box{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;
       padding:.75rem 1rem;margin-top:.9rem;font-size:.8rem;color:#e08090;line-height:1.65}
 
+    /* Badges */
     .badges{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.25rem}
     .badge{font-size:.68rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;
       color:var(--dim);background:#0d0d14}
 
-    .result{display:none;margin-top:1.75rem;width:100%;max-width:560px;background:var(--surface);
-      border:1px solid var(--border);border-radius:20px;padding:1.5rem;text-align:center}
+    /* Result */
+    .result{display:none;margin-top:1.75rem;width:100%;max-width:560px;
+      background:var(--surface);border:1px solid var(--border);
+      border-radius:20px;padding:1.5rem;text-align:center}
     .result p{font-size:.8rem;color:var(--muted);margin-bottom:.9rem}
     #outImg{max-width:100%;border-radius:12px;border:1px solid var(--border);
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
@@ -93,37 +115,52 @@
 </div>
 
 <div class="card">
-  <div class="drop-zone" id="dropZone">
+
+  <!-- Single hidden input — both labels below point to it via "for" attribute -->
+  <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/bmp"/>
+
+  <!-- Drop zone — clicking this label opens the file picker directly, no JS needed -->
+  <label class="upload-label" for="fileInput" id="dropZone">
     <div class="dz-circle">&#128247;</div>
     <h2>Drop your image here</h2>
-    <p>or <span class="browse" id="browse">click to browse</span></p>
-    <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/bmp"/>
-  </div>
+    <p>or click to browse files</p>
+  </label>
 
   <div class="or"><hr><span>or</span><hr></div>
-  <button class="btn-choose" id="btnChoose">&#128193; Choose image file</button>
 
+  <!-- Button that also opens the picker — also a label, no JS .click() needed -->
+  <label class="pick-label" for="fileInput">
+    &#128193; Choose image file
+  </label>
+
+  <!-- Selected file row -->
   <div class="file-row" id="fileRow">
-    <span class="fi">&#128444;</span>
+    <span class="fi" id="fileIcon">&#128444;</span>
     <div class="fi-info">
       <div class="fi-name" id="fName"></div>
       <div class="fi-size" id="fSize"></div>
     </div>
-    <button class="btn-x" id="btnX">&#10005;</button>
+    <button class="btn-x" id="btnX" type="button">&#10005;</button>
   </div>
 
-  <button class="btn-go" id="btnGo">&#10024; Remove Background</button>
-  <div class="prog-wrap" id="progWrap"><div class="prog-bar" id="progBar"></div></div>
+  <button class="btn-go" id="btnGo" type="button">&#10024; Remove Background</button>
+
+  <div class="prog-wrap" id="progWrap">
+    <div class="prog-bar" id="progBar"></div>
+  </div>
   <p id="status"></p>
   <div class="err-box" id="errBox"></div>
 
   <div class="badges">
-    <span class="badge">PNG</span><span class="badge">JPG</span>
-    <span class="badge">WEBP</span><span class="badge">BMP</span>
+    <span class="badge">PNG</span>
+    <span class="badge">JPG</span>
+    <span class="badge">WEBP</span>
+    <span class="badge">BMP</span>
     <span class="badge">Unlimited</span>
     <span class="badge">No upload</span>
     <span class="badge">100% private</span>
   </div>
+
 </div>
 
 <div class="result" id="result">
@@ -134,22 +171,20 @@
 </div>
 
 <footer>
-  AI runs entirely in your browser &mdash; your images never leave your device<br>
+  AI runs entirely in your browser &mdash; images never leave your device<br>
   Powered by <a href="https://github.com/imgly/background-removal-js" target="_blank">@imgly/background-removal</a>
   &nbsp;&middot;&nbsp;
   <a href="https://github.com/HP980322/bg-remover" target="_blank">GitHub</a>
 </footer>
 
 <script type="module">
-// @imgly/background-removal — purpose-built in-browser background removal
-// Handles model download, WASM, inference, and masking all internally
-import { removeBackground } from 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/index.browser.mjs';
+import { removeBackground }
+  from 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/index.browser.mjs';
 
-const dropZone  = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
-const browse    = document.getElementById('browse');
-const btnChoose = document.getElementById('btnChoose');
+const dropZone  = document.getElementById('dropZone');
 const fileRow   = document.getElementById('fileRow');
+const fileIcon  = document.getElementById('fileIcon');
 const fName     = document.getElementById('fName');
 const fSize     = document.getElementById('fSize');
 const btnX      = document.getElementById('btnX');
@@ -164,23 +199,35 @@ const btnDl     = document.getElementById('btnDl');
 
 let file = null;
 
-// ── File handling ─────────────────────────────────────────────────────────────
-const openPicker = () => fileInput.click();
-browse.onclick    = e => { e.stopPropagation(); openPicker(); };
-btnChoose.onclick = openPicker;
-dropZone.onclick  = openPicker;
-fileInput.onchange = () => pick(fileInput.files[0]);
-
-dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('over');
-  pick(e.dataTransfer.files[0]);
+// ── File input change (covers both label clicks AND drag-and-drop) ────────────
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) pick(fileInput.files[0]);
 });
 
+// ── Drag-and-drop onto the drop zone ─────────────────────────────────────────
+// Note: label's default click behaviour already handles the picker open
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f) {
+    // Set the dropped file onto the input so everything stays consistent
+    const dt = new DataTransfer();
+    dt.items.add(f);
+    fileInput.files = dt.files;
+    pick(f);
+  }
+});
+
+// ── Pick a file ───────────────────────────────────────────────────────────────
 function pick(f) {
-  if (!f) return;
   file = f;
+  fileIcon.textContent   = '&#128444;';
   fName.textContent      = f.name;
   fSize.textContent      = (f.size / 1048576).toFixed(2) + ' MB';
   fileRow.style.display  = 'flex';
@@ -192,18 +239,21 @@ function pick(f) {
   progWrap.style.display = 'none';
 }
 
-btnX.onclick = e => {
-  e.stopPropagation();
-  file = null; fileInput.value = '';
+// ── Clear selection ───────────────────────────────────────────────────────────
+btnX.addEventListener('click', () => {
+  file = null;
+  fileInput.value        = '';
   fileRow.style.display  = 'none';
   btnGo.style.display    = 'none';
   result.style.display   = 'none';
   errBox.style.display   = 'none';
   status.textContent     = '';
-};
+  progBar.style.width    = '0%';
+  progWrap.style.display = 'none';
+});
 
 // ── Remove background ─────────────────────────────────────────────────────────
-btnGo.onclick = async () => {
+btnGo.addEventListener('click', async () => {
   if (!file) return;
 
   btnGo.disabled         = true;
@@ -212,33 +262,29 @@ btnGo.onclick = async () => {
   result.style.display   = 'none';
   progWrap.style.display = 'block';
   progBar.style.width    = '5%';
-  status.textContent     = 'Loading AI model (first time only, ~50 MB)…';
+  status.textContent     = 'Starting… (first run downloads ~50 MB model)';
 
   try {
     const config = {
-      progress: (key, current, total) => {
-        if (total > 0) {
-          const pct = Math.round(current / total * 100);
-          progBar.style.width = Math.min(pct, 90) + '%';
-          if (key.includes('fetch') || key.includes('load')) {
-            status.textContent = `Downloading model… ${pct}%`;
-          } else {
-            status.textContent = `Processing… ${pct}%`;
-          }
-        }
-      },
-      // Use the CDN for model files
       publicPath: 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/',
+      progress: (key, current, total) => {
+        if (!total) return;
+        const pct = Math.min(Math.round(current / total * 100), 95);
+        progBar.style.width = pct + '%';
+        status.textContent  = key.startsWith('fetch')
+          ? `Downloading model… ${pct}%`
+          : `Processing… ${pct}%`;
+      },
     };
 
-    const blob = await removeBackground(file, config);
+    const resultBlob = await removeBackground(file, config);
 
     progBar.style.width = '100%';
     status.textContent  = '✅ Done!';
 
-    const url = URL.createObjectURL(blob);
-    outImg.src = url;
+    const url  = URL.createObjectURL(resultBlob);
     const stem = file.name.replace(/\.[^.]+$/, '');
+    outImg.src     = url;
     btnDl.href     = url;
     btnDl.download = stem + '_nobg.png';
 
@@ -255,7 +301,7 @@ btnGo.onclick = async () => {
     btnGo.disabled    = false;
     btnGo.textContent = '✨ Remove Background';
   }
-};
+});
 </script>
 </body>
 </html>
