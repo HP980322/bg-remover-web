@@ -113,7 +113,7 @@
 
   <div class="pills">
     <span class="pill">RMBG-1.4 AI</span>
-    <span class="pill">Spot-clean</span>
+    <span class="pill">Smart cleanup</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
   </div>
@@ -132,13 +132,13 @@
 </footer>
 
 <script type="module">
-// ── CRITICAL: single-threaded WASM for GitHub Pages (no SharedArrayBuffer) ──
+// CRITICAL: single-threaded WASM — fixes silent hang on GitHub Pages (no SharedArrayBuffer)
 import { AutoModel, AutoProcessor, env, RawImage }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
-env.allowLocalModels             = false;
-env.backends.onnx.wasm.proxy     = false;
-env.backends.onnx.wasm.numThreads = 1;   // ← fixes silent hang on GitHub Pages
+env.allowLocalModels              = false;
+env.backends.onnx.wasm.proxy      = false;
+env.backends.onnx.wasm.numThreads = 1;
 
 const $ = id => document.getElementById(id);
 const modelBar=$('modelBar'), mbLabel=$('mbLabel'), mbBar=$('mbBar'),
@@ -158,10 +158,8 @@ async function loadModel() {
   attempt++;
   aiModel = aiProc = null;
   btnRetry.style.display = 'none';
-  mbBar.style.width = '0%';
-  mbBar.className = 'mb-bar';
-  modelBar.className = 'model-bar';
-  mbLabel.className = 'mb-label wait';
+  mbBar.style.width = '0%'; mbBar.className = 'mb-bar';
+  modelBar.className = 'model-bar'; mbLabel.className = 'mb-label wait';
   mbLabel.textContent = attempt === 1 ? '⏳ Loading AI model for the first time…'
                                       : `⏳ Loading AI model (attempt ${attempt})…`;
   mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever';
@@ -188,12 +186,10 @@ async function loadModel() {
         size: { width: 1024, height: 1024 },
       }
     });
-    modelBar.className = 'model-bar ready';
-    mbLabel.className  = 'mb-label ok';
+    modelBar.className = 'model-bar ready'; mbLabel.className = 'mb-label ok';
     mbLabel.textContent = '✅ AI ready — drop an image to get started!';
-    mbBar.style.width  = '100%';
-    mbBar.className    = 'mb-bar ok';
-    mbSub.textContent  = attempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
+    mbBar.style.width = '100%'; mbBar.className = 'mb-bar ok';
+    mbSub.textContent = attempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
   } catch (err) {
     console.error('Model load failed (attempt ' + attempt + '):', err);
     if (attempt === 1) {
@@ -201,8 +197,7 @@ async function loadModel() {
       mbSub.textContent   = 'Retrying automatically…';
       setTimeout(loadModel, 2000);
     } else {
-      modelBar.className  = 'model-bar error';
-      mbLabel.className   = 'mb-label err';
+      modelBar.className = 'model-bar error'; mbLabel.className = 'mb-label err';
       mbLabel.textContent = '❌ Could not load model.';
       mbSub.textContent   = 'Check your connection, then click Try again.';
       btnRetry.style.display = 'inline-block';
@@ -234,26 +229,34 @@ clearBtn.addEventListener('click', () => {
   statusMsg.textContent = '';
 });
 
-// ── Mask post-processing (removes dirty spots) ────────────────────────────────
-// Tested in Python on actual AI output — matches fixed_v2.png result.
+// ══════════════════════════════════════════════════════════════════════════════
+// cleanMask(maskU8, srcData, W, H)
 //
-// Steps (all in JS, no external libs):
-//  1. Threshold mask at 0.5 → binary 0/1
-//  2. Remove small floating fg blobs (< 0.5% of total pixels) — these are
-//     scattered bg residue that the AI misclassified as foreground
-//  3. Fill internal holes — bg pockets enclosed by fg (not touching image border)
-//  4. Feather only the boundary pixels with a 3×3 box blur
-function cleanMask(mask, W, H) {
-  const WH = W * H;
+// Post-processes the raw AI mask to fix connector artifacts and between-region
+// gaps. Tested in Python against the actual RMBG-1.4 output on the target image.
+//
+// Pipeline (matches fix_v3.py):
+//   1. Threshold at 0.5 → binary
+//   2. Build background colour model from image edge pixels (k-means k=8)
+//   3. Remove small floating fg blobs (< 0.5% of image) — scattered AI noise
+//   4. SMART hole-fill: enclosed bg pockets are filled only if they are
+//      body-coloured (dist-to-bg-model > 30% of cluster tolerance).
+//      bg-coloured pockets (between legs, gaps in bg) stay transparent.
+//   5. Connector cleanup: thin horizontal runs (< 20 px wide) that are
+//      blue-biased AND bg-coloured AND low-saturation → remove.
+//      This keeps arm/sleeve connectors (body-coloured) and removes
+//      background threads that leaked into the fg mask.
+//   6. Second small-blob pass (0.3% threshold) after connector removal.
+//   7. Feather: 3×3 box blur applied only at the mask boundary.
+// ══════════════════════════════════════════════════════════════════════════════
+function cleanMask(maskU8, srcData, W, H) {
+  const WH   = W * H;
   const DIRS = [-1, 1, -W, W];
 
-  // ── Step 1: threshold at 0.5 → binary ──────────────────────────────────
-  const bin = new Uint8Array(WH);
-  for (let i = 0; i < WH; i++) bin[i] = mask[i] > 127 ? 1 : 0;
-
-  // ── BFS connected-component labeller (4-connected) ───────────────────────
-  function labelComponents(binaryArr) {
-    const lab  = new Int32Array(WH);
+  // ── helpers ────────────────────────────────────────────────────────────────
+  function bfsLabel(binaryArr) {
+    // Returns { lab: Int32Array, sizes: [{id,size}] }
+    const lab   = new Int32Array(WH);
     const sizes = [];
     let nLab = 0;
     for (let s = 0; s < WH; s++) {
@@ -274,72 +277,195 @@ function cleanMask(mask, W, H) {
       }
       sizes.push({ id: lbl, size: sz });
     }
-    return { lab, sizes, nLab };
+    return { lab, sizes };
   }
 
-  // ── Step 2: remove small fg blobs ────────────────────────────────────────
-  const minFgSize = Math.floor(WH * 0.005); // 0.5% of image
-  const { lab: fgLab, sizes: fgSizes } = labelComponents(bin);
-  const keepFg = new Set(fgSizes.filter(s => s.size >= minFgSize).map(s => s.id));
-  for (let i = 0; i < WH; i++) {
-    if (bin[i] && !keepFg.has(fgLab[i])) bin[i] = 0;
+  // ── Step 1: threshold ──────────────────────────────────────────────────────
+  const bin = new Uint8Array(WH);
+  for (let i = 0; i < WH; i++) bin[i] = maskU8[i] > 127 ? 1 : 0;
+
+  // ── Step 2: background colour model from image edges (k-means k=8) ────────
+  // Collect one sample every 3 pixels along all 4 borders
+  const bgSamples = [];
+  for (let x = 0; x < W; x += 3) {
+    const t = x * 4, b = ((H - 1) * W + x) * 4;
+    bgSamples.push([srcData[t], srcData[t+1], srcData[t+2]]);
+    bgSamples.push([srcData[b], srcData[b+1], srcData[b+2]]);
+  }
+  for (let y = 1; y < H - 1; y += 3) {
+    const l = y * W * 4, r = (y * W + W - 1) * 4;
+    bgSamples.push([srcData[l], srcData[l+1], srcData[l+2]]);
+    bgSamples.push([srcData[r], srcData[r+1], srcData[r+2]]);
+  }
+  const K = 8;
+  const N = bgSamples.length;
+  // Init centroids evenly spaced through samples
+  const cents = Array.from({length: K}, (_, ki) => bgSamples[Math.floor(ki * N / K)].slice());
+  for (let iter = 0; iter < 20; iter++) {
+    const sums = Array.from({length: K}, () => [0, 0, 0]);
+    const cnts = new Int32Array(K);
+    for (let i = 0; i < N; i++) {
+      const s = bgSamples[i];
+      let bk = 0, bd = Infinity;
+      for (let k = 0; k < K; k++) {
+        const dr = s[0]-cents[k][0], dg = s[1]-cents[k][1], db = s[2]-cents[k][2];
+        const d = dr*dr + dg*dg + db*db;
+        if (d < bd) { bd = d; bk = k; }
+      }
+      sums[bk][0] += s[0]; sums[bk][1] += s[1]; sums[bk][2] += s[2]; cnts[bk]++;
+    }
+    for (let k = 0; k < K; k++)
+      if (cnts[k] > 0) cents[k] = [sums[k][0]/cnts[k], sums[k][1]/cnts[k], sums[k][2]/cnts[k]];
   }
 
-  // ── Step 3: fill internal bg holes ───────────────────────────────────────
+  // Per-cluster tolerance = mean_dist + 2.5*std + 12, clamped [22, 62]
+  const cDists = Array.from({length: K}, () => []);
+  for (let i = 0; i < N; i++) {
+    const s = bgSamples[i];
+    let bk = 0, bd = Infinity;
+    for (let k = 0; k < K; k++) {
+      const dr=s[0]-cents[k][0], dg=s[1]-cents[k][1], db=s[2]-cents[k][2];
+      const d = Math.sqrt(dr*dr+dg*dg+db*db);
+      if (d < bd) { bd = d; bk = k; }
+    }
+    cDists[bk].push(bd);
+  }
+  const tols = cDists.map(arr => {
+    if (!arr.length) return 26;
+    const mean = arr.reduce((a,v) => a+v, 0) / arr.length;
+    const std  = Math.sqrt(arr.reduce((a,v) => a+(v-mean)**2, 0) / arr.length);
+    return Math.max(22, Math.min(62, mean + 2.5*std + 12));
+  });
+
+  // Per-pixel: nearest centroid distance and its tolerance
+  const nd = new Float32Array(WH);
+  const tp = new Float32Array(WH);
+  for (let p = 0; p < WH; p++) {
+    const pi = p * 4;
+    const r = srcData[pi], g = srcData[pi+1], b = srcData[pi+2];
+    let bk = 0, bd = Infinity;
+    for (let k = 0; k < K; k++) {
+      const dr=r-cents[k][0], dg=g-cents[k][1], db2=b-cents[k][2];
+      const d = Math.sqrt(dr*dr+dg*dg+db2*db2);
+      if (d < bd) { bd = d; bk = k; }
+    }
+    nd[p] = bd; tp[p] = tols[bk];
+  }
+  // is_bg_colored: pixel colour matches the background palette
+  // bg_frac(component) = fraction of pixels where nd <= tp
+  function bgFrac(indices) {
+    let cnt = 0;
+    for (const i of indices) if (nd[i] <= tp[i]) cnt++;
+    return cnt / indices.length;
+  }
+
+  // ── Step 3: remove small fg blobs (< 0.5%) ────────────────────────────────
+  const minFgSz = Math.floor(WH * 0.005);
+  let { lab: fgLab, sizes: fgSizes } = bfsLabel(bin);
+  const keepFg = new Set(fgSizes.filter(s => s.size >= minFgSz).map(s => s.id));
+  for (let i = 0; i < WH; i++) if (bin[i] && !keepFg.has(fgLab[i])) bin[i] = 0;
+
+  // ── Step 4: SMART hole-fill ────────────────────────────────────────────────
+  // For each enclosed bg component: fill only if body-coloured (bg_frac < 0.30)
   const bgBin = new Uint8Array(WH);
   for (let i = 0; i < WH; i++) bgBin[i] = bin[i] ? 0 : 1;
-  const { lab: bgLab } = labelComponents(bgBin);
+  const { lab: bgLab, sizes: bgSizes } = bfsLabel(bgBin);
 
-  // Find which bg labels touch the image border
-  const borderLabels = new Set();
+  // Collect border-touching bg labels
+  const borderLabs = new Set();
   for (let x = 0; x < W; x++) {
-    borderLabels.add(bgLab[x]);           // top row
-    borderLabels.add(bgLab[(H-1)*W + x]); // bottom row
+    borderLabs.add(bgLab[x]); borderLabs.add(bgLab[(H-1)*W+x]);
   }
   for (let y = 0; y < H; y++) {
-    borderLabels.add(bgLab[y * W]);         // left col
-    borderLabels.add(bgLab[y * W + W - 1]); // right col
+    borderLabs.add(bgLab[y*W]); borderLabs.add(bgLab[y*W+W-1]);
   }
-  borderLabels.delete(0);
-  // Any bg component not on the border → it's a hole → fill it
+  borderLabs.delete(0);
+
+  // Group pixel indices by label for enclosed bg components
+  const bgCompPx = new Map();
   for (let i = 0; i < WH; i++) {
-    if (bgBin[i] && bgLab[i] && !borderLabels.has(bgLab[i])) bin[i] = 1;
+    const lbl = bgLab[i];
+    if (!bgBin[i] || borderLabs.has(lbl)) continue;
+    if (!bgCompPx.has(lbl)) bgCompPx.set(lbl, []);
+    bgCompPx.get(lbl).push(i);
+  }
+  for (const [, pixels] of bgCompPx) {
+    // bg-coloured hole → keep transparent; body-coloured hole → fill
+    if (bgFrac(pixels) < 0.30) {
+      for (const i of pixels) bin[i] = 1;
+    }
   }
 
-  // ── Step 4: feather only boundary pixels ─────────────────────────────────
-  const alpha = new Float32Array(WH);
-  for (let i = 0; i < WH; i++) alpha[i] = bin[i];
+  // ── Step 5: connector cleanup ──────────────────────────────────────────────
+  // Scan every row for thin fg runs (< 20 px wide).
+  // Remove a run if: blue-biased (B-R > 15) AND bg-coloured (bg_frac > 60%)
+  //                  AND low saturation (max-min < 20).
+  // This removes background threads leaked into the mask while preserving
+  // real body connectors (arm/sleeve junctions) which have body colours.
+  for (let y = 0; y < H; y++) {
+    const rowBase = y * W;
+    let runStart = -1;
+    const flush = (end) => {
+      const rw = end - runStart;
+      if (rw >= 20) { runStart = -1; return; }   // wide run → keep, not a connector
+      // Sample this run in the original image
+      let sumR = 0, sumG = 0, sumB = 0, bgCnt = 0;
+      for (let x = runStart; x < end; x++) {
+        const pi = (rowBase + x) * 4;
+        sumR += srcData[pi]; sumG += srcData[pi+1]; sumB += srcData[pi+2];
+        if (nd[rowBase+x] <= tp[rowBase+x]) bgCnt++;
+      }
+      const avgR = sumR/rw, avgG = sumG/rw, avgB = sumB/rw;
+      const blueBias   = avgB - avgR;
+      const saturation = (Math.max(avgR,avgG,avgB) - Math.min(avgR,avgG,avgB));
+      const bgFracRun  = bgCnt / rw;
+      if (blueBias > 15 && bgFracRun > 0.60 && saturation < 20) {
+        for (let x = runStart; x < end; x++) bin[rowBase + x] = 0;
+      }
+      runStart = -1;
+    };
+    for (let x = 0; x < W; x++) {
+      if (bin[rowBase+x]) { if (runStart < 0) runStart = x; }
+      else                { if (runStart >= 0) flush(x); }
+    }
+    if (runStart >= 0) flush(W);
+  }
 
-  // 3×3 box blur
+  // ── Step 6: second small-blob pass (0.3%) ─────────────────────────────────
+  const minFgSz2 = Math.floor(WH * 0.003);
+  ({ lab: fgLab, sizes: fgSizes } = bfsLabel(bin));
+  const keepFg2 = new Set(fgSizes.filter(s => s.size >= minFgSz2).map(s => s.id));
+  for (let i = 0; i < WH; i++) if (bin[i] && !keepFg2.has(fgLab[i])) bin[i] = 0;
+
+  // ── Step 7: feather boundary pixels ───────────────────────────────────────
+  const alpha   = new Float32Array(WH);
+  for (let i = 0; i < WH; i++) alpha[i] = bin[i];
   const blurred = new Float32Array(WH);
   for (let y = 1; y < H-1; y++) {
     for (let x = 1; x < W-1; x++) {
-      const ci = y*W + x;
-      let s = 0;
-      s += alpha[(y-1)*W+(x-1)] + alpha[(y-1)*W+x] + alpha[(y-1)*W+(x+1)];
-      s += alpha[y*W+(x-1)]     + alpha[ci]         + alpha[y*W+(x+1)];
-      s += alpha[(y+1)*W+(x-1)] + alpha[(y+1)*W+x] + alpha[(y+1)*W+(x+1)];
+      const ci = y*W+x, s =
+        alpha[(y-1)*W+(x-1)] + alpha[(y-1)*W+x] + alpha[(y-1)*W+(x+1)] +
+        alpha[y*W+(x-1)]     + alpha[ci]         + alpha[y*W+(x+1)]     +
+        alpha[(y+1)*W+(x-1)] + alpha[(y+1)*W+x] + alpha[(y+1)*W+(x+1)];
       blurred[ci] = s / 9;
     }
   }
-  // Copy edges
-  for (let x = 0; x < W; x++) { blurred[x] = alpha[x]; blurred[(H-1)*W+x] = alpha[(H-1)*W+x]; }
-  for (let y = 0; y < H; y++) { blurred[y*W] = alpha[y*W]; blurred[y*W+W-1] = alpha[y*W+W-1]; }
+  for (let x = 0; x < W; x++) { blurred[x]=alpha[x]; blurred[(H-1)*W+x]=alpha[(H-1)*W+x]; }
+  for (let y = 0; y < H; y++) { blurred[y*W]=alpha[y*W]; blurred[y*W+W-1]=alpha[y*W+W-1]; }
 
-  // Apply blur only at boundary zone (where blurred is between 0.05 and 0.95)
-  const final = new Uint8Array(WH);
+  const out = new Uint8Array(WH);
   for (let i = 0; i < WH; i++) {
     const b = blurred[i];
-    final[i] = (b > 0.05 && b < 0.95) ? Math.round(b * 255) : (bin[i] ? 255 : 0);
+    out[i] = (b > 0.05 && b < 0.95) ? Math.round(b * 255) : (bin[i] ? 255 : 0);
   }
-  return final;
+  return out;
 }
 
 // ── Remove background ─────────────────────────────────────────────────────────
 goBtn.addEventListener('click', async () => {
   if (!cf) return;
   if (!aiModel || !aiProc) {
-    errMsg.textContent   = '⚠ AI model is still loading — please wait a moment.';
+    errMsg.textContent = '⚠ AI model is still loading — please wait a moment.';
     errMsg.style.display = 'block'; return;
   }
 
@@ -352,7 +478,7 @@ goBtn.addEventListener('click', async () => {
   const tick = setInterval(() => { if (pct < 75) { pct += 2; progBar.style.width = pct + '%'; } }, 300);
 
   try {
-    // 1. Read image
+    // 1. Read image via FileReader (avoids CORS/blob-URL issues)
     const dataUrl = await new Promise((res, rej) => {
       const r = new FileReader(); r.onerror = rej;
       r.onload = e => res(e.target.result); r.readAsDataURL(cf);
@@ -362,13 +488,14 @@ goBtn.addEventListener('click', async () => {
     });
     const W = img.naturalWidth, H = img.naturalHeight;
 
+    // 2. Draw to canvas — get raw RGBA pixel data
     const srcCanvas = document.createElement('canvas');
     srcCanvas.width = W; srcCanvas.height = H;
     const srcCtx = srcCanvas.getContext('2d');
     srcCtx.drawImage(img, 0, 0);
     const srcData = srcCtx.getImageData(0, 0, W, H).data;
 
-    // Build RawImage (RGB only)
+    // Build RGB array for RawImage
     const rgb = new Uint8ClampedArray(W * H * 3);
     for (let i = 0; i < W * H; i++) {
       rgb[i*3] = srcData[i*4]; rgb[i*3+1] = srcData[i*4+1]; rgb[i*3+2] = srcData[i*4+2];
@@ -377,19 +504,19 @@ goBtn.addEventListener('click', async () => {
 
     statusMsg.textContent = 'Running AI…'; progBar.style.width = '30%';
 
-    // 2. Run model
+    // 3. Pre-process + run RMBG-1.4 model
     const { pixel_values } = await aiProc(rawImg);
     const { output }       = await aiModel({ input: pixel_values });
 
     clearInterval(tick);
-    progBar.style.width = '82%'; statusMsg.textContent = 'Cleaning up mask…';
+    progBar.style.width = '80%'; statusMsg.textContent = 'Cleaning up mask…';
 
-    // 3. Extract + resize mask to original dimensions
+    // 4. Extract mask tensor → Uint8Array at model resolution
     const maskTensor = output[0].squeeze();
-    const maskFlat   = maskTensor.data;      // Float32Array 0..1
+    const maskFlat   = maskTensor.data;   // Float32Array 0..1
     const mH = maskTensor.dims[0], mW = maskTensor.dims[1];
 
-    // Resize via canvas
+    // Blit mask onto a canvas at model size, then scale to original size
     const mCanvas = document.createElement('canvas');
     mCanvas.width = mW; mCanvas.height = mH;
     const mCtx = mCanvas.getContext('2d');
@@ -403,19 +530,19 @@ goBtn.addEventListener('click', async () => {
     const sCanvas = document.createElement('canvas');
     sCanvas.width = W; sCanvas.height = H;
     const sCtx = sCanvas.getContext('2d');
-    sCtx.drawImage(mCanvas, 0, 0, W, H);
-    const rawMask = sCtx.getImageData(0, 0, W, H).data; // RGBA, mask in R channel
+    sCtx.drawImage(mCanvas, 0, 0, W, H);   // bilinear resize
+    const rawMask = sCtx.getImageData(0, 0, W, H).data;
 
-    // Extract mask as Uint8Array (single channel, 0-255)
+    // Single-channel mask (red channel after resize)
     const maskU8 = new Uint8Array(W * H);
-    for (let i = 0; i < W * H; i++) maskU8[i] = rawMask[i * 4]; // red channel
+    for (let i = 0; i < W * H; i++) maskU8[i] = rawMask[i * 4];
 
-    // 4. Post-process: remove dirty spots + fill holes + feather edges
-    progBar.style.width = '88%'; statusMsg.textContent = 'Removing spots…';
-    const cleanAlpha = cleanMask(maskU8, W, H);
+    // 5. Post-process: smart hole-fill + connector cleanup + feather
+    progBar.style.width = '88%'; statusMsg.textContent = 'Refining edges…';
+    const cleanAlpha = cleanMask(maskU8, srcData, W, H);
 
-    // 5. Composite onto output canvas
-    progBar.style.width = '95%'; statusMsg.textContent = 'Compositing…';
+    // 6. Composite: original pixels + clean alpha
+    progBar.style.width = '96%'; statusMsg.textContent = 'Compositing…';
     outCanvas.width = W; outCanvas.height = H;
     const outCtx = outCanvas.getContext('2d');
     const outData = outCtx.createImageData(W, H);
