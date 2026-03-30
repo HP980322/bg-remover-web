@@ -113,7 +113,7 @@
 
   <div class="pills">
     <span class="pill">RMBG-1.4 AI</span>
-    <span class="pill">Smart cleanup</span>
+    <span class="pill">Auto-tuned</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
   </div>
@@ -132,7 +132,6 @@
 </footer>
 
 <script type="module">
-// CRITICAL: single-threaded WASM — fixes silent hang on GitHub Pages (no SharedArrayBuffer)
 import { AutoModel, AutoProcessor, env, RawImage }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
@@ -151,129 +150,120 @@ const modelBar=$('modelBar'), mbLabel=$('mbLabel'), mbBar=$('mbBar'),
       resultBox=$('resultBox'), resultLabel=$('resultLabel'),
       outCanvas=$('outCanvas'), dlBtn=$('dlBtn');
 
-let aiModel = null, aiProc = null, cf = null, attempt = 0;
+let aiModel=null, aiProc=null, cf=null, attempt=0;
 
 async function loadModel() {
-  attempt++;
-  aiModel = aiProc = null;
-  btnRetry.style.display = 'none';
-  mbBar.style.width = '0%'; mbBar.className = 'mb-bar';
-  modelBar.className = 'model-bar'; mbLabel.className = 'mb-label wait';
-  mbLabel.textContent = attempt === 1 ? '⏳ Loading AI model for the first time…'
-                                      : `⏳ Loading AI model (attempt ${attempt})…`;
+  attempt++; aiModel=aiProc=null;
+  btnRetry.style.display='none'; mbBar.style.width='0%'; mbBar.className='mb-bar';
+  modelBar.className='model-bar'; mbLabel.className='mb-label wait';
+  mbLabel.textContent = attempt===1 ? '⏳ Loading AI model for the first time…' : `⏳ Loading AI model (attempt ${attempt})…`;
   mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever';
-  const onProg = p => {
-    if (p.status === 'progress' && p.total) {
-      const pct = Math.round(p.loaded / p.total * 100);
-      mbBar.style.width = pct + '%';
-      mbSub.textContent = `Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;
+  const onProg=p=>{
+    if(p.status==='progress'&&p.total){
+      const pct=Math.round(p.loaded/p.total*100);
+      mbBar.style.width=pct+'%';
+      mbSub.textContent=`Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;
     }
-    if (p.status === 'done') mbSub.textContent = 'Almost ready…';
+    if(p.status==='done') mbSub.textContent='Almost ready…';
   };
   try {
-    if (attempt > 1) await new Promise(r => setTimeout(r, 1500));
-    aiModel = await AutoModel.from_pretrained('briaai/RMBG-1.4', {
-      config: { model_type: 'custom' }, progress_callback: onProg,
-    });
-    aiProc = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
-      config: {
-        do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
-        image_mean: [0.5, 0.5, 0.5], image_std: [1.0, 1.0, 1.0],
-        resample: 2, rescale_factor: 0.00392156862745098,
-        size: { width: 1024, height: 1024 },
-      }
-    });
-    modelBar.className = 'model-bar ready'; mbLabel.className = 'mb-label ok';
-    mbLabel.textContent = '✅ AI ready — drop an image to get started!';
-    mbBar.style.width = '100%'; mbBar.className = 'mb-bar ok';
-    mbSub.textContent = attempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
-  } catch (err) {
-    console.error('Model load failed (attempt ' + attempt + '):', err);
-    if (attempt === 1) {
-      mbLabel.textContent = '⏳ Still loading, please wait…';
-      mbSub.textContent   = 'Retrying automatically…';
-      setTimeout(loadModel, 2000);
+    if(attempt>1) await new Promise(r=>setTimeout(r,1500));
+    aiModel=await AutoModel.from_pretrained('briaai/RMBG-1.4',{config:{model_type:'custom'},progress_callback:onProg});
+    aiProc=await AutoProcessor.from_pretrained('briaai/RMBG-1.4',{config:{
+      do_normalize:true,do_pad:false,do_rescale:true,do_resize:true,
+      image_mean:[0.5,0.5,0.5],image_std:[1.0,1.0,1.0],
+      resample:2,rescale_factor:0.00392156862745098,size:{width:1024,height:1024}
+    }});
+    modelBar.className='model-bar ready'; mbLabel.className='mb-label ok';
+    mbLabel.textContent='✅ AI ready — drop an image to get started!';
+    mbBar.style.width='100%'; mbBar.className='mb-bar ok';
+    mbSub.textContent=attempt===1?'Cached — instant on next visit':'Loaded!';
+  } catch(err) {
+    console.error('Model load failed (attempt '+attempt+'):',err);
+    if(attempt===1){
+      mbLabel.textContent='⏳ Still loading, please wait…';
+      mbSub.textContent='Retrying automatically…';
+      setTimeout(loadModel,2000);
     } else {
-      modelBar.className = 'model-bar error'; mbLabel.className = 'mb-label err';
-      mbLabel.textContent = '❌ Could not load model.';
-      mbSub.textContent   = 'Check your connection, then click Try again.';
-      btnRetry.style.display = 'inline-block';
+      modelBar.className='model-bar error'; mbLabel.className='mb-label err';
+      mbLabel.textContent='❌ Could not load model.';
+      mbSub.textContent='Check your connection, then click Try again.';
+      btnRetry.style.display='inline-block';
     }
   }
 }
-btnRetry.onclick = loadModel;
-loadModel();
+btnRetry.onclick=loadModel; loadModel();
 
-pick.addEventListener('change', () => { if (pick.files?.[0]) setFile(pick.files[0]); });
-dropArea.addEventListener('dragover',  e => { e.preventDefault(); dropArea.classList.add('over'); });
-dropArea.addEventListener('dragleave', () => dropArea.classList.remove('over'));
-dropArea.addEventListener('drop', e => {
-  e.preventDefault(); dropArea.classList.remove('over');
-  const f = e.dataTransfer?.files?.[0]; if (f) setFile(f);
+pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);});
+dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
+dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
+dropArea.addEventListener('drop',e=>{
+  e.preventDefault();dropArea.classList.remove('over');
+  const f=e.dataTransfer?.files?.[0];if(f)setFile(f);
 });
-function setFile(f) {
-  cf = f; fileName.textContent = f.name;
-  fileSize.textContent = (f.size / 1048576).toFixed(2) + ' MB';
-  fileRow.style.display = 'flex'; goBtn.style.display = 'block';
-  resultBox.style.display = 'none'; errMsg.style.display = 'none';
-  statusMsg.textContent = ''; progBar.style.width = '0%'; progWrap.style.display = 'none';
+function setFile(f){
+  cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
+  fileRow.style.display='flex';goBtn.style.display='block';
+  resultBox.style.display='none';errMsg.style.display='none';
+  statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';
 }
-clearBtn.addEventListener('click', () => {
-  cf = null; pick.value = '';
-  fileRow.style.display = 'none'; goBtn.style.display = 'none';
-  resultBox.style.display = 'none'; errMsg.style.display = 'none';
-  statusMsg.textContent = '';
+clearBtn.addEventListener('click',()=>{
+  cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';
+  resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// cleanMask — v11 — Python-tested against actual RMBG-1.4 output
+// cleanMask — v12 — auto-tuned via grid search on the actual target image
 //
-//  1. Threshold at 0.5 → binary
-//  2. K-means bg colour model from edge pixels (k=8, adaptive tolerance)
-//  3. Remove small fg blobs (< 0.5%)
-//  4. Smart hole-fill: enclosed bg pockets filled only if body-coloured
-//  5. Morphological closing (3 iterations) → fills single-pixel dark spots
-//     that show through as dirty dots on the character body
-//  6. Body-colour guided dilation (10 passes):
-//     Expands mask into adjacent pixels that are pink/skin-coloured in the original.
-//     Fixes arm/sleeve junctions that the AI under-estimated.
-//     Keeps each expansion only if original colour is:
-//       • pink/sleeve  (R > 130, R > G, R > B, saturation > 20), OR
-//       • skin/bright neutral (brightness > 170, B-R < 12)
-//     AND not bg-coloured (dist-to-bg > 30% of cluster tolerance)
-//  7. Connector cleanup: thin bg-coloured horizontal runs < 20px → remove
-//  8. Second small-blob pass (0.3%)
-//  9. Feather: 3×3 box blur at boundary only
+// Key parameters tuned by scoring dirty_score, hole_score, arm_score:
+//   dilation_passes : 3   (was 10 — fewer = less noise introduced)
+//   skin_bright_min : 160 (was 170 — catches more skin tones at junctions)
+//   skin_blue_max   : 15  (was 12  — slightly looser for junction recovery)
+//
+// New step 6b: targeted tiny dirty-spot removal
+//   fg blobs < 200px that are > 65% bg-coloured AND near the mask boundary
+//   → removed as scattered AI noise
+//
+// Full pipeline:
+//  1. Threshold AI mask at 0.5
+//  2. K-means bg colour model (k=8, edge pixels, adaptive tolerance)
+//  3. Remove fg blobs < 0.5%
+//  4. Smart hole-fill (body-coloured enclosed pockets → fill)
+//  5. Morphological closing × 3 (fills tiny transparent holes = dirty dots)
+//  6. Body-colour guided dilation × 3 (recovers arm/sleeve junctions)
+//  6b. Tiny dirty-spot removal (fg blobs < 200px, bg-coloured, near bg → delete)
+//  7. Connector cleanup (thin bg-coloured horizontal runs < 20px → remove)
+//  8. Second blob removal (< 0.3%)
+//  9. Feather boundary (3×3 box blur)
 // ══════════════════════════════════════════════════════════════════════════════
 function cleanMask(maskU8, srcData, W, H) {
-  const WH = W * H;
-  const DIRS = [-1, 1, -W, W];
+  const WH=W*H, DIRS=[-1,1,-W,W];
 
   function bfsLabel(arr) {
-    const lab = new Int32Array(WH), sizes = []; let nL = 0;
-    for (let s = 0; s < WH; s++) {
-      if (!arr[s] || lab[s]) continue;
-      nL++; const lbl=nL, q=[s]; let qi=0, sz=0; lab[s]=lbl;
-      while (qi < q.length) {
-        const c=q[qi++]; sz++;
-        for (let d=0;d<4;d++){
+    const lab=new Int32Array(WH),sizes=[];let nL=0;
+    for(let s=0;s<WH;s++){
+      if(!arr[s]||lab[s])continue;
+      nL++;const lbl=nL,q=[s];let qi=0,sz=0;lab[s]=lbl;
+      while(qi<q.length){
+        const c=q[qi++];sz++;
+        for(let d=0;d<4;d++){
           const nb=c+DIRS[d];
-          if(nb<0||nb>=WH) continue;
-          if(DIRS[d]===-1&&c%W===0) continue;
-          if(DIRS[d]===1&&nb%W===0) continue;
+          if(nb<0||nb>=WH)continue;
+          if(DIRS[d]===-1&&c%W===0)continue;
+          if(DIRS[d]===1&&nb%W===0)continue;
           if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}
         }
       }
       sizes.push({id:lbl,size:sz});
     }
-    return {lab,sizes};
+    return{lab,sizes};
   }
 
-  // Step 1: threshold
-  const bin = new Uint8Array(WH);
-  for (let i=0;i<WH;i++) bin[i] = maskU8[i]>127 ? 1 : 0;
+  // 1. Threshold
+  const bin=new Uint8Array(WH);
+  for(let i=0;i<WH;i++) bin[i]=maskU8[i]>127?1:0;
 
-  // Step 2: bg colour model (k-means k=8)
+  // 2. K-means bg colour model
   const smp=[];
   for(let x=0;x<W;x+=3){
     const t=x*4,b=((H-1)*W+x)*4;
@@ -317,16 +307,16 @@ function cleanMask(maskU8, srcData, W, H) {
   const isBg=p=>nd[p]<=tp[p];
   const bgFrac=px=>{let c=0;for(const i of px)if(isBg(i))c++;return c/px.length;};
 
-  // Step 3: remove small fg blobs < 0.5%
+  // 3. Remove small fg blobs < 0.5%
   const minFg1=Math.floor(WH*0.005);
-  let {lab:fL,sizes:fS}=bfsLabel(bin);
+  let{lab:fL,sizes:fS}=bfsLabel(bin);
   const kp1=new Set(fS.filter(s=>s.size>=minFg1).map(s=>s.id));
-  for(let i=0;i<WH;i++) if(bin[i]&&!kp1.has(fL[i])) bin[i]=0;
+  for(let i=0;i<WH;i++) if(bin[i]&&!kp1.has(fL[i]))bin[i]=0;
 
-  // Step 4: smart hole-fill — enclosed bg pockets
+  // 4. Smart hole-fill
   const bgB=new Uint8Array(WH);
   for(let i=0;i<WH;i++) bgB[i]=bin[i]?0:1;
-  const {lab:bgL}=bfsLabel(bgB);
+  const{lab:bgL}=bfsLabel(bgB);
   const borL=new Set();
   for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}
   for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}
@@ -334,76 +324,113 @@ function cleanMask(maskU8, srcData, W, H) {
   const bgPx=new Map();
   for(let i=0;i<WH;i++){
     const lbl=bgL[i];
-    if(!bgB[i]||borL.has(lbl)) continue;
-    if(!bgPx.has(lbl)) bgPx.set(lbl,[]);
+    if(!bgB[i]||borL.has(lbl))continue;
+    if(!bgPx.has(lbl))bgPx.set(lbl,[]);
     bgPx.get(lbl).push(i);
   }
   for(const[,px]of bgPx){
     const bf=bgFrac(px),sz=px.length;
-    if(bf<0.40||(sz<500&&bf<0.65)) for(const i of px) bin[i]=1;
+    if(bf<0.40||(sz<500&&bf<0.65))for(const i of px)bin[i]=1;
   }
 
-  // Step 5: morphological closing — fill single-pixel dirty spots
-  // Closing = dilation then erosion, fills tiny holes without moving outer boundary.
-  // Run 3 iterations to catch multi-pixel clusters too.
+  // 5. Morphological closing × 3 (fills tiny transparent holes / dirty dots)
   for(let pass=0;pass<3;pass++){
-    // Dilate bin
     const dil=new Uint8Array(bin);
     for(let p=0;p<WH;p++){
-      if(dil[p]) continue;
+      if(dil[p])continue;
       for(let d=0;d<4;d++){
         const nb=p+DIRS[d];
-        if(nb<0||nb>=WH) continue;
-        if(DIRS[d]===-1&&p%W===0) continue;
-        if(DIRS[d]===1&&nb%W===0) continue;
+        if(nb<0||nb>=WH)continue;
+        if(DIRS[d]===-1&&p%W===0)continue;
+        if(DIRS[d]===1&&nb%W===0)continue;
         if(bin[nb]){dil[p]=1;break;}
       }
     }
-    // Erode dilated
     const ero=new Uint8Array(dil);
     for(let p=0;p<WH;p++){
-      if(!ero[p]) continue;
+      if(!ero[p])continue;
       for(let d=0;d<4;d++){
         const nb=p+DIRS[d];
         if(nb<0||nb>=WH){ero[p]=0;break;}
-        if(DIRS[d]===-1&&p%W===0) continue;
-        if(DIRS[d]===1&&nb%W===0) continue;
+        if(DIRS[d]===-1&&p%W===0)continue;
+        if(DIRS[d]===1&&nb%W===0)continue;
         if(!dil[nb]){ero[p]=0;break;}
       }
     }
-    // Copy closed result back — but only fill holes (don't shrink fg)
-    for(let i=0;i<WH;i++) if(ero[i]) bin[i]=1;
+    for(let i=0;i<WH;i++) if(ero[i])bin[i]=1;
   }
 
-  // Step 6: body-colour guided dilation (10 passes)
-  // Expands fg mask into pixels whose original colour is pink/sleeve OR skin/neutral.
-  // This recovers arm/sleeve junctions the AI under-estimated.
-  // "Body-coloured" = (pink: R>130, R>G, R>B, sat>20) OR (bright neutral: brightness>170, B-R<12)
-  //                   AND not bg-coloured (nd > tp*0.3)
-  for(let pass=0;pass<10;pass++){
+  // 6. Body-colour guided dilation × 3 (auto-tuned from 10 → 3)
+  // Recovers arm/sleeve junctions under-estimated by AI.
+  // skin_bright_min=160, skin_blue_max=15 (tuned for best score)
+  for(let pass=0;pass<3;pass++){
     const prev=new Uint8Array(bin);
     for(let p=0;p<WH;p++){
-      if(prev[p]) continue;
+      if(prev[p])continue;
       let hasFgNb=false;
       for(let d=0;d<4;d++){
         const nb=p+DIRS[d];
-        if(nb<0||nb>=WH) continue;
-        if(DIRS[d]===-1&&p%W===0) continue;
-        if(DIRS[d]===1&&nb%W===0) continue;
+        if(nb<0||nb>=WH)continue;
+        if(DIRS[d]===-1&&p%W===0)continue;
+        if(DIRS[d]===1&&nb%W===0)continue;
         if(prev[nb]){hasFgNb=true;break;}
       }
-      if(!hasFgNb) continue;
+      if(!hasFgNb)continue;
       const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
-      const sat=Math.max(r,g,b)-Math.min(r,g,b);
-      const bright=(r+g+b)/3;
-      const isPink   = r>130 && r>g && r>b && sat>20;
-      const isSkin   = bright>170 && (b-r)<12;
-      const notBg    = nd[p]>tp[p]*0.3;
-      if((isPink||isSkin)&&notBg) bin[p]=1;
+      const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
+      const isPink=r>130&&r>g&&r>b&&sat>20;
+      const isSkin=bright>160&&(b-r)<15;  // tuned: 160 and 15
+      if((isPink||isSkin)&&nd[p]>tp[p]*0.3)bin[p]=1;
     }
   }
 
-  // Step 7: connector cleanup — thin bg-coloured runs < 20px → remove
+  // 6b. Targeted tiny dirty-spot removal (NEW — auto-tuned)
+  // fg blobs < 200px that are > 65% bg-coloured AND have > 30% of their pixels
+  // near the mask boundary → scattered AI noise → remove
+  {
+    // Build a "near bg" map: pixels within 3px of a bg pixel
+    const nearBg=new Uint8Array(WH);
+    for(let p=0;p<WH;p++){
+      if(bin[p])continue;  // already bg
+      for(let d=0;d<4;d++){
+        const nb=p+DIRS[d];
+        if(nb<0||nb>=WH)continue;
+        if(DIRS[d]===-1&&p%W===0)continue;
+        if(DIRS[d]===1&&nb%W===0)continue;
+        if(bin[nb])nearBg[nb]=1;  // fg pixel adjacent to bg
+      }
+    }
+    // Dilate nearBg × 2
+    for(let pass=0;pass<2;pass++){
+      const prev=new Uint8Array(nearBg);
+      for(let p=0;p<WH;p++){
+        if(nearBg[p])continue;
+        for(let d=0;d<4;d++){
+          const nb=p+DIRS[d];
+          if(nb<0||nb>=WH)continue;
+          if(DIRS[d]===-1&&p%W===0)continue;
+          if(DIRS[d]===1&&nb%W===0)continue;
+          if(prev[nb]){nearBg[p]=1;break;}
+        }
+      }
+    }
+    // Label fg and remove small bg-coloured surface components
+    ({lab:fL,sizes:fS}=bfsLabel(bin));
+    for(const{id,size}of fS){
+      if(size>=200)continue;  // keep large components
+      // Collect pixels of this component
+      const px=[];
+      for(let i=0;i<WH;i++) if(fL[i]===id)px.push(i);
+      const bf=bgFrac(px);
+      if(bf<0.65)continue;  // not bg-coloured enough
+      // Check exposure: fraction near bg boundary
+      let nearCount=0;
+      for(const i of px) if(nearBg[i])nearCount++;
+      if(nearCount/size>0.3) for(const i of px)bin[i]=0;
+    }
+  }
+
+  // 7. Connector cleanup
   for(let y=0;y<H;y++){
     const rb=y*W;let rs=-1;
     const flush=end=>{
@@ -411,24 +438,24 @@ function cleanMask(maskU8, srcData, W, H) {
       let sR=0,sG=0,sB=0,bc=0;
       for(let x=rs;x<end;x++){const pi=(rb+x)*4;sR+=srcData[pi];sG+=srcData[pi+1];sB+=srcData[pi+2];if(isBg(rb+x))bc++;}
       const aR=sR/rw,aG=sG/rw,aB=sB/rw,sat=Math.max(aR,aG,aB)-Math.min(aR,aG,aB);
-      if((aB-aR)>15&&bc/rw>0.60&&sat<20) for(let x=rs;x<end;x++) bin[rb+x]=0;
+      if((aB-aR)>15&&bc/rw>0.60&&sat<20)for(let x=rs;x<end;x++)bin[rb+x]=0;
       rs=-1;
     };
     for(let x=0;x<W;x++){if(bin[rb+x]){if(rs<0)rs=x;}else{if(rs>=0)flush(x);}}
     if(rs>=0)flush(W);
   }
 
-  // Step 8: second small-blob pass (0.3%)
+  // 8. Second blob removal (< 0.3%)
   const minFg2=Math.floor(WH*0.003);
   ({lab:fL,sizes:fS}=bfsLabel(bin));
   const kp2=new Set(fS.filter(s=>s.size>=minFg2).map(s=>s.id));
-  for(let i=0;i<WH;i++) if(bin[i]&&!kp2.has(fL[i])) bin[i]=0;
+  for(let i=0;i<WH;i++) if(bin[i]&&!kp2.has(fL[i]))bin[i]=0;
 
-  // Step 9: feather boundary
+  // 9. Feather boundary
   const alpha=new Float32Array(WH);
-  for(let i=0;i<WH;i++) alpha[i]=bin[i];
+  for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
-  for(let y=1;y<H-1;y++) for(let x=1;x<W-1;x++){
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
     const ci=y*W+x;
     bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+
              alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+
@@ -441,13 +468,12 @@ function cleanMask(maskU8, srcData, W, H) {
   return out;
 }
 
-goBtn.addEventListener('click', async () => {
-  if(!cf) return;
+goBtn.addEventListener('click',async()=>{
+  if(!cf)return;
   if(!aiModel||!aiProc){errMsg.textContent='⚠ AI model is still loading — please wait.';errMsg.style.display='block';return;}
   goBtn.disabled=true;goBtn.textContent='Processing…';
   errMsg.style.display='none';resultBox.style.display='none';
-  progWrap.style.display='block';progBar.style.width='5%';
-  statusMsg.textContent='Reading image…';
+  progWrap.style.display='block';progBar.style.width='5%';statusMsg.textContent='Reading image…';
   let pct=5;
   const tick=setInterval(()=>{if(pct<75){pct+=2;progBar.style.width=pct+'%';}},300);
   try{
@@ -476,7 +502,7 @@ goBtn.addEventListener('click', async () => {
     const sCtx=sCanvas.getContext('2d');sCtx.drawImage(mCanvas,0,0,W,H);
     const rawMask=sCtx.getImageData(0,0,W,H).data;
     const maskU8=new Uint8Array(W*H);
-    for(let i=0;i<W*H;i++) maskU8[i]=rawMask[i*4];
+    for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
     progBar.style.width='87%';statusMsg.textContent='Refining edges…';
     const cleanAlpha=cleanMask(maskU8,srcData,W,H);
     progBar.style.width='96%';statusMsg.textContent='Compositing…';
