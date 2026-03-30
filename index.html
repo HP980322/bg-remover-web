@@ -18,27 +18,27 @@
     .hero h1{font-size:2.1rem;font-weight:700;letter-spacing:-.5px;margin-bottom:.4rem}
     .hero h1 span{color:var(--purple)}
     .hero p{color:var(--muted);font-size:.9rem}
-    .hero .free-badge{display:inline-block;margin-top:.6rem;background:#1a1a2e;border:1px solid #3a2f5a;
+    .free-badge{display:inline-block;margin-top:.6rem;background:#1a1a2e;border:1px solid #3a2f5a;
       border-radius:999px;padding:.25rem .9rem;font-size:.75rem;color:#a89fff}
 
     .card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);
       border-radius:20px;padding:2rem}
 
-    /* Loading bar shown while model downloads */
-    .model-bar{background:var(--surface2);border:1px solid var(--border);border-radius:12px;
-      padding:1rem 1.2rem;margin-bottom:1.5rem;font-size:.82rem;color:var(--muted);text-align:center}
-    .model-bar .mb-label{margin-bottom:.6rem}
+    .model-bar{border:1px solid var(--border);border-radius:12px;padding:1rem 1.2rem;
+      margin-bottom:1.5rem;font-size:.82rem;color:var(--muted);text-align:center;
+      background:var(--surface2)}
+    .mb-label{margin-bottom:.6rem}
     .mb-track{background:var(--bg);border-radius:6px;height:6px;overflow:hidden}
-    .mb-fill{height:100%;width:0%;background:var(--purple);transition:width .4s}
+    .mb-fill{height:100%;width:0%;background:var(--purple);transition:width .3s}
     .mb-sub{font-size:.72rem;color:var(--dim);margin-top:.45rem}
 
-    /* Drop zone */
     .drop-zone{border:1.5px dashed var(--dim);border-radius:14px;padding:2.75rem 1.5rem;
       text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--bg)}
     .drop-zone:hover,.drop-zone.over{border-color:var(--purple);background:#100e1c}
-    .drop-zone.disabled{pointer-events:none;opacity:.45}
-    .dz-circle{width:58px;height:58px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);
-      display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 1rem}
+    .drop-zone.disabled{pointer-events:none;opacity:.4}
+    .dz-circle{width:58px;height:58px;border-radius:50%;background:var(--surface2);
+      border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
+      font-size:24px;margin:0 auto 1rem}
     .drop-zone h2{font-size:.95rem;font-weight:500;color:#d0d0e0;margin-bottom:4px}
     .drop-zone p{font-size:.78rem;color:var(--muted)}
     .browse{color:#a89fff;text-decoration:underline;cursor:pointer}
@@ -71,7 +71,6 @@
 
     .prog-wrap{display:none;background:var(--bg);border-radius:6px;height:6px;overflow:hidden;margin-top:.8rem}
     .prog-bar{height:100%;width:0%;background:var(--purple);transition:width .3s}
-
     #status{margin-top:.75rem;font-size:.8rem;color:#9d8fff;min-height:1.1rem;text-align:center}
 
     .err-box{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;
@@ -81,7 +80,6 @@
     .badge{font-size:.68rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;
       color:var(--dim);background:#0d0d14}
 
-    /* Result */
     .result{display:none;margin-top:1.75rem;width:100%;max-width:560px;background:var(--surface);
       border:1px solid var(--border);border-radius:20px;padding:1.5rem;text-align:center}
     .result p{font-size:.8rem;color:var(--muted);margin-bottom:.9rem}
@@ -101,19 +99,17 @@
 <div class="hero">
   <h1>&#127924; BG <span>Remover</span></h1>
   <p>Remove image backgrounds instantly &mdash; AI runs inside your browser</p>
-  <span class="free-badge">&#10003; 100% free &nbsp;&nbsp; &#10003; No sign-up &nbsp;&nbsp; &#10003; Unlimited images &nbsp;&nbsp; &#10003; Private</span>
+  <span class="free-badge">&#10003; 100% free &nbsp;&nbsp; &#10003; No sign-up &nbsp;&nbsp; &#10003; Unlimited &nbsp;&nbsp; &#10003; Private</span>
 </div>
 
 <div class="card">
 
-  <!-- Model loading indicator -->
   <div class="model-bar" id="modelBar">
     <div class="mb-label" id="mbLabel">&#8987; Loading AI model for the first time&hellip;</div>
     <div class="mb-track"><div class="mb-fill" id="mbFill"></div></div>
-    <div class="mb-sub" id="mbSub">Downloading ~40 MB once, then cached forever</div>
+    <div class="mb-sub" id="mbSub">Downloading ~175 MB once &mdash; cached in your browser forever after</div>
   </div>
 
-  <!-- Drop zone -->
   <div class="drop-zone disabled" id="dropZone">
     <div class="dz-circle">&#128247;</div>
     <h2>Drop your image here</h2>
@@ -146,28 +142,29 @@
     <span class="badge">No upload</span>
     <span class="badge">100% private</span>
   </div>
-
 </div>
 
 <div class="result" id="result">
-  <p>&#9989; Background removed &mdash; transparent PNG ready to download</p>
-  <canvas id="outCanvas"></canvas>
-  <br>
+  <p>&#9989; Background removed &mdash; transparent PNG ready</p>
+  <canvas id="outCanvas"></canvas><br>
   <button class="btn-dl" id="btnDl">&#8659; Download PNG</button>
 </div>
 
 <footer>
-  AI runs entirely in your browser &mdash; your images are never uploaded to any server<br>
-  Powered by <a href="https://huggingface.co/Xenova/modnet" target="_blank">MODNet</a> via
-  <a href="https://huggingface.co/docs/transformers.js" target="_blank">Transformers.js</a> &nbsp;&middot;&nbsp;
+  AI runs entirely in your browser &mdash; images are never sent anywhere<br>
+  Powered by <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank">BRIA RMBG-1.4</a> via
+  <a href="https://huggingface.co/docs/transformers.js" target="_blank">Transformers.js</a>
+  &nbsp;&middot;&nbsp;
   <a href="https://github.com/HP980322/bg-remover" target="_blank">GitHub</a>
 </footer>
 
 <script type="module">
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
+import { AutoModel, AutoProcessor, env, RawImage }
+  from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
 env.allowLocalModels = false;
 
+// ── DOM refs ─────────────────────────────────────────────────────────────────
 const modelBar  = document.getElementById('modelBar');
 const mbLabel   = document.getElementById('mbLabel');
 const mbFill    = document.getElementById('mbFill');
@@ -189,52 +186,70 @@ const result    = document.getElementById('result');
 const outCanvas = document.getElementById('outCanvas');
 const btnDl     = document.getElementById('btnDl');
 
-let pipe = null;
-let file = null;
+let model = null, processor = null, file = null;
 
-// ── Load model ──────────────────────────────────────────────────────────────
+// ── Progress helper ───────────────────────────────────────────────────────────
+function onProgress(p) {
+  if (p.status === 'progress' && p.total) {
+    const pct = Math.round((p.loaded / p.total) * 100);
+    mbFill.style.width = pct + '%';
+    mbSub.textContent = `Downloading… ${pct}%  (${(p.loaded/1024/1024).toFixed(1)} / ${(p.total/1024/1024).toFixed(1)} MB)`;
+  }
+}
+
+// ── Load model ────────────────────────────────────────────────────────────────
 async function loadModel() {
   try {
-    pipe = await pipeline('image-segmentation', 'Xenova/modnet', {
-      progress_callback: (p) => {
-        if (p.status === 'downloading') {
-          const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
-          mbFill.style.width = pct + '%';
-          mbSub.textContent = `Downloading model… ${pct}%`;
-        }
-        if (p.status === 'ready' || p.status === 'loaded') {
-          mbFill.style.width = '100%';
-        }
+    mbLabel.textContent = '⏳ Loading AI model for the first time…';
+
+    model = await AutoModel.from_pretrained('briaai/RMBG-1.4', {
+      config: { model_type: 'custom' },
+      progress_callback: onProgress,
+    });
+
+    processor = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
+      config: {
+        do_normalize: true,
+        do_pad: false,
+        do_rescale: true,
+        do_resize: true,
+        image_mean: [0.5, 0.5, 0.5],
+        image_std:  [1.0, 1.0, 1.0],
+        resample: 2,
+        rescale_factor: 0.00392156862745098,
+        size: { width: 1024, height: 1024 },
       }
     });
-    // Model ready
-    modelBar.style.background = '#0f1f17';
-    modelBar.style.borderColor = '#1a5a3e';
-    mbLabel.textContent = '✅ AI model ready — drop an image to get started!';
-    mbLabel.style.color = '#5dcaa5';
-    mbFill.style.background = '#2d9e6b';
-    mbFill.style.width = '100%';
-    mbSub.textContent = 'Model cached in your browser — instant next time';
 
-    // Unlock UI
+    // Ready!
+    modelBar.style.background   = '#0f1f17';
+    modelBar.style.borderColor  = '#1a5a3e';
+    mbLabel.textContent         = '✅ AI ready — drop an image below to get started!';
+    mbLabel.style.color         = '#5dcaa5';
+    mbFill.style.background     = '#2d9e6b';
+    mbFill.style.width          = '100%';
+    mbSub.textContent           = 'Model cached — instant on next visit';
+
     dropZone.classList.remove('disabled');
     btnChoose.disabled = false;
+
   } catch (e) {
     mbLabel.textContent = '❌ Failed to load model: ' + e.message;
     mbLabel.style.color = '#e08090';
+    console.error(e);
   }
 }
 loadModel();
 
-// ── File handling ────────────────────────────────────────────────────────────
+// ── File handling ─────────────────────────────────────────────────────────────
 const openPicker = () => fileInput.click();
-browse.onclick   = e => { e.stopPropagation(); openPicker(); };
+browse.onclick    = e  => { e.stopPropagation(); openPicker(); };
 btnChoose.onclick = openPicker;
 dropZone.onclick  = openPicker;
 fileInput.onchange = () => pick(fileInput.files[0]);
 
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('over'));
 dropZone.addEventListener('drop', e => {
   e.preventDefault(); dropZone.classList.remove('over');
   pick(e.dataTransfer.files[0]);
@@ -245,91 +260,75 @@ function pick(f) {
   file = f;
   fName.textContent = f.name;
   fSize.textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
-  fileRow.style.display = 'flex';
-  btnGo.style.display = 'block';
-  result.style.display = 'none';
-  errBox.style.display = 'none';
-  status.textContent = '';
-  progBar.style.width = '0%';
+  fileRow.style.display  = 'flex';
+  btnGo.style.display    = 'block';
+  result.style.display   = 'none';
+  errBox.style.display   = 'none';
+  status.textContent     = '';
+  progBar.style.width    = '0%';
   progWrap.style.display = 'none';
 }
 
 btnX.onclick = e => {
   e.stopPropagation();
   file = null; fileInput.value = '';
-  fileRow.style.display = 'none';
-  btnGo.style.display = 'none';
-  status.textContent = '';
-  errBox.style.display = 'none';
+  fileRow.style.display  = 'none';
+  btnGo.style.display    = 'none';
+  status.textContent     = '';
+  errBox.style.display   = 'none';
 };
 
-// ── Remove background ────────────────────────────────────────────────────────
+// ── Remove background ─────────────────────────────────────────────────────────
 btnGo.onclick = async () => {
-  if (!file || !pipe) return;
+  if (!file || !model || !processor) return;
 
-  btnGo.disabled = true;
-  btnGo.textContent = 'Processing…';
-  errBox.style.display = 'none';
+  btnGo.disabled      = true;
+  btnGo.textContent   = 'Processing…';
+  errBox.style.display  = 'none';
   progWrap.style.display = 'block';
-  progBar.style.width = '15%';
-  status.textContent = 'Running AI in your browser…';
+  progBar.style.width = '10%';
+  status.textContent  = 'Running AI in your browser…';
 
-  // Animate progress while working
-  let pct = 15;
+  let pct = 10;
   const tick = setInterval(() => {
     if (pct < 80) { pct += 2; progBar.style.width = pct + '%'; }
-  }, 300);
+  }, 200);
 
   try {
+    // 1. Load image
     const imgUrl = URL.createObjectURL(file);
+    const image  = await RawImage.fromURL(imgUrl);
 
-    // Run segmentation
-    const output = await pipe(imgUrl, { subtask: 'foreground-extraction' });
+    // 2. Pre-process
+    const { pixel_values } = await processor(image);
+
+    // 3. Run model
+    const { output } = await model({ input: pixel_values });
+
     clearInterval(tick);
-    progBar.style.width = '90%';
+    progBar.style.width = '85%';
 
-    // Get mask from result
-    const mask = output[0].mask;   // ImageData or similar
+    // 4. Post-process mask
+    const maskData = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(image.width, image.height);
 
-    // Draw original image + apply mask as alpha
-    const img = new Image();
-    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = imgUrl; });
+    // 5. Composite onto canvas
+    outCanvas.width  = image.width;
+    outCanvas.height = image.height;
+    const ctx     = outCanvas.getContext('2d');
+    const imgEl   = new Image();
+    await new Promise((res, rej) => { imgEl.onload = res; imgEl.onerror = rej; imgEl.src = imgUrl; });
+    ctx.drawImage(imgEl, 0, 0);
 
-    outCanvas.width  = img.naturalWidth;
-    outCanvas.height = img.naturalHeight;
-    const ctx = outCanvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-
-    // Apply mask: mask is a grayscale ImageData where white = keep
-    const imgData = ctx.getImageData(0, 0, outCanvas.width, outCanvas.height);
-    const pixels  = imgData.data;
-
-    // Resize mask to image dimensions if needed
-    const maskCanvas = document.createElement('canvas');
-    maskCanvas.width  = outCanvas.width;
-    maskCanvas.height = outCanvas.height;
-    const mCtx = maskCanvas.getContext('2d');
-
-    // mask may be an HTMLImageElement or ImageData from transformers.js
-    if (mask instanceof ImageData) {
-      mCtx.putImageData(mask, 0, 0);
-    } else {
-      // It's a tensor or raw array — build ImageData
-      const mImg = output[0].mask;
-      mCtx.drawImage(mImg, 0, 0, outCanvas.width, outCanvas.height);
+    const pixelData = ctx.getImageData(0, 0, image.width, image.height);
+    const rgba      = pixelData.data;
+    for (let i = 0; i < rgba.length; i += 4) {
+      rgba[i + 3] = maskData.data[i]; // apply mask as alpha
     }
-
-    const maskData = mCtx.getImageData(0, 0, outCanvas.width, outCanvas.height).data;
-
-    for (let i = 0; i < pixels.length; i += 4) {
-      // Use red channel of mask as alpha
-      pixels[i + 3] = maskData[i];
-    }
-    ctx.putImageData(imgData, 0, 0);
+    ctx.putImageData(pixelData, 0, 0);
 
     progBar.style.width = '100%';
+    status.textContent  = '✅ Done!';
 
-    // Setup download
     btnDl.onclick = () => {
       const a = document.createElement('a');
       a.download = file.name.replace(/\.[^.]+$/, '') + '_nobg.png';
@@ -339,18 +338,17 @@ btnGo.onclick = async () => {
 
     result.style.display = 'block';
     result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    status.textContent = '✅ Done!';
     URL.revokeObjectURL(imgUrl);
 
   } catch (err) {
     clearInterval(tick);
     console.error(err);
-    progBar.style.width = '0%';
-    status.textContent = '';
-    errBox.textContent = '❌ ' + (err.message || 'Something went wrong. Try a different image.');
+    progBar.style.width  = '0%';
+    status.textContent   = '';
+    errBox.textContent   = '❌ ' + (err.message || 'Something went wrong.');
     errBox.style.display = 'block';
   } finally {
-    btnGo.disabled = false;
+    btnGo.disabled    = false;
     btnGo.textContent = '✨ Remove Background';
   }
 };
