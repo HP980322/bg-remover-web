@@ -15,8 +15,6 @@
       padding:.22rem .85rem;font-size:.73rem;color:#a89fff;margin-bottom:2rem}
     .card{width:100%;max-width:560px;background:#15151e;border:1px solid #2a2a3a;
       border-radius:18px;padding:1.75rem}
-
-    /* model status bar */
     .model-bar{border:1px solid var(--bc,#2a2a3a);border-radius:12px;padding:1rem 1.2rem;
       margin-bottom:1.5rem;text-align:center;background:#1c1c28;transition:all .3s}
     .model-bar.ready{--bc:#1a5a3e;background:#0f1f17}
@@ -32,7 +30,6 @@
     .btn-retry{display:none;margin-top:.65rem;padding:.4rem 1.2rem;background:#3a2060;
       color:#c0a8ff;border:1px solid #6040a0;border-radius:8px;font-size:.78rem;cursor:pointer}
     .btn-retry:hover{background:#4a2878}
-
     .upload-area{display:block;border:2px dashed #333;border-radius:12px;padding:2.5rem 1rem;
       text-align:center;cursor:pointer;transition:border-color .15s,background .15s;
       background:#0d0d12;user-select:none}
@@ -86,8 +83,6 @@
 <span class="badge">&#10003; Free &nbsp; &#10003; No sign-up &nbsp; &#10003; AI-powered &nbsp; &#10003; Private</span>
 
 <div class="card">
-
-  <!-- AI model status -->
   <div class="model-bar" id="modelBar">
     <div class="mb-label wait" id="mbLabel">&#8987; Loading AI model for the first time…</div>
     <div class="mb-track"><div class="mb-bar" id="mbBar"></div></div>
@@ -118,8 +113,8 @@
 
   <div class="pills">
     <span class="pill">RMBG-1.4 AI</span>
+    <span class="pill">Spot-clean</span>
     <span class="pill">No upload</span>
-    <span class="pill">Unlimited</span>
     <span class="pill">100% private</span>
   </div>
 </div>
@@ -137,20 +132,13 @@
 </footer>
 
 <script type="module">
-// ─── CRITICAL FIX FOR GITHUB PAGES ──────────────────────────────────────────
-// GitHub Pages does NOT send Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy
-// headers, which means SharedArrayBuffer is unavailable, which means ONNX WASM
-// multi-threading silently hangs forever.
-// Fix: force single-threaded WASM mode BEFORE importing the library.
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── CRITICAL: single-threaded WASM for GitHub Pages (no SharedArrayBuffer) ──
 import { AutoModel, AutoProcessor, env, RawImage }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
-// Must set BEFORE loading any model
-env.allowLocalModels          = false;
-env.backends.onnx.wasm.proxy  = false;      // don't use Web Worker proxy
-env.backends.onnx.wasm.numThreads = 1;      // single-threaded — works on any server
+env.allowLocalModels             = false;
+env.backends.onnx.wasm.proxy     = false;
+env.backends.onnx.wasm.numThreads = 1;   // ← fixes silent hang on GitHub Pages
 
 const $ = id => document.getElementById(id);
 const modelBar=$('modelBar'), mbLabel=$('mbLabel'), mbBar=$('mbBar'),
@@ -165,7 +153,7 @@ const modelBar=$('modelBar'), mbLabel=$('mbLabel'), mbBar=$('mbBar'),
 
 let aiModel = null, aiProc = null, cf = null, attempt = 0;
 
-// ── Load AI model ────────────────────────────────────────────────────────────
+// ── Model loading ─────────────────────────────────────────────────────────────
 async function loadModel() {
   attempt++;
   aiModel = aiProc = null;
@@ -174,28 +162,24 @@ async function loadModel() {
   mbBar.className = 'mb-bar';
   modelBar.className = 'model-bar';
   mbLabel.className = 'mb-label wait';
-  mbLabel.textContent = attempt === 1
-    ? '⏳ Loading AI model for the first time…'
-    : `⏳ Loading AI model (attempt ${attempt})…`;
+  mbLabel.textContent = attempt === 1 ? '⏳ Loading AI model for the first time…'
+                                      : `⏳ Loading AI model (attempt ${attempt})…`;
   mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever';
 
-  function onProg(p) {
+  const onProg = p => {
     if (p.status === 'progress' && p.total) {
       const pct = Math.round(p.loaded / p.total * 100);
       mbBar.style.width = pct + '%';
       mbSub.textContent = `Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;
     }
     if (p.status === 'done') mbSub.textContent = 'Almost ready…';
-  }
+  };
 
   try {
     if (attempt > 1) await new Promise(r => setTimeout(r, 1500));
-
     aiModel = await AutoModel.from_pretrained('briaai/RMBG-1.4', {
-      config: { model_type: 'custom' },
-      progress_callback: onProg,
+      config: { model_type: 'custom' }, progress_callback: onProg,
     });
-
     aiProc = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
       config: {
         do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
@@ -204,15 +188,12 @@ async function loadModel() {
         size: { width: 1024, height: 1024 },
       }
     });
-
-    // ✅ Success
-    modelBar.className  = 'model-bar ready';
-    mbLabel.className   = 'mb-label ok';
+    modelBar.className = 'model-bar ready';
+    mbLabel.className  = 'mb-label ok';
     mbLabel.textContent = '✅ AI ready — drop an image to get started!';
-    mbBar.style.width   = '100%';
-    mbBar.className     = 'mb-bar ok';
-    mbSub.textContent   = attempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
-
+    mbBar.style.width  = '100%';
+    mbBar.className    = 'mb-bar ok';
+    mbSub.textContent  = attempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
   } catch (err) {
     console.error('Model load failed (attempt ' + attempt + '):', err);
     if (attempt === 1) {
@@ -231,7 +212,7 @@ async function loadModel() {
 btnRetry.onclick = loadModel;
 loadModel();
 
-// ── File handling ────────────────────────────────────────────────────────────
+// ── File handling ─────────────────────────────────────────────────────────────
 pick.addEventListener('change', () => { if (pick.files?.[0]) setFile(pick.files[0]); });
 dropArea.addEventListener('dragover',  e => { e.preventDefault(); dropArea.classList.add('over'); });
 dropArea.addEventListener('dragleave', () => dropArea.classList.remove('over'));
@@ -239,29 +220,122 @@ dropArea.addEventListener('drop', e => {
   e.preventDefault(); dropArea.classList.remove('over');
   const f = e.dataTransfer?.files?.[0]; if (f) setFile(f);
 });
-
 function setFile(f) {
-  cf = f;
-  fileName.textContent   = f.name;
-  fileSize.textContent   = (f.size / 1048576).toFixed(2) + ' MB';
-  fileRow.style.display  = 'flex';
-  goBtn.style.display    = 'block';
-  resultBox.style.display = 'none';
-  errMsg.style.display    = 'none';
-  statusMsg.textContent   = '';
-  progBar.style.width     = '0%';
-  progWrap.style.display  = 'none';
+  cf = f; fileName.textContent = f.name;
+  fileSize.textContent = (f.size / 1048576).toFixed(2) + ' MB';
+  fileRow.style.display = 'flex'; goBtn.style.display = 'block';
+  resultBox.style.display = 'none'; errMsg.style.display = 'none';
+  statusMsg.textContent = ''; progBar.style.width = '0%'; progWrap.style.display = 'none';
 }
 clearBtn.addEventListener('click', () => {
   cf = null; pick.value = '';
-  fileRow.style.display   = 'none';
-  goBtn.style.display     = 'none';
-  resultBox.style.display = 'none';
-  errMsg.style.display    = 'none';
-  statusMsg.textContent   = '';
+  fileRow.style.display = 'none'; goBtn.style.display = 'none';
+  resultBox.style.display = 'none'; errMsg.style.display = 'none';
+  statusMsg.textContent = '';
 });
 
-// ── Remove background ────────────────────────────────────────────────────────
+// ── Mask post-processing (removes dirty spots) ────────────────────────────────
+// Tested in Python on actual AI output — matches fixed_v2.png result.
+//
+// Steps (all in JS, no external libs):
+//  1. Threshold mask at 0.5 → binary 0/1
+//  2. Remove small floating fg blobs (< 0.5% of total pixels) — these are
+//     scattered bg residue that the AI misclassified as foreground
+//  3. Fill internal holes — bg pockets enclosed by fg (not touching image border)
+//  4. Feather only the boundary pixels with a 3×3 box blur
+function cleanMask(mask, W, H) {
+  const WH = W * H;
+  const DIRS = [-1, 1, -W, W];
+
+  // ── Step 1: threshold at 0.5 → binary ──────────────────────────────────
+  const bin = new Uint8Array(WH);
+  for (let i = 0; i < WH; i++) bin[i] = mask[i] > 127 ? 1 : 0;
+
+  // ── BFS connected-component labeller (4-connected) ───────────────────────
+  function labelComponents(binaryArr) {
+    const lab  = new Int32Array(WH);
+    const sizes = [];
+    let nLab = 0;
+    for (let s = 0; s < WH; s++) {
+      if (!binaryArr[s] || lab[s]) continue;
+      nLab++;
+      const lbl = nLab;
+      const q = [s]; let qi = 0, sz = 0;
+      lab[s] = lbl;
+      while (qi < q.length) {
+        const cur = q[qi++]; sz++;
+        for (let d = 0; d < 4; d++) {
+          const nb = cur + DIRS[d];
+          if (nb < 0 || nb >= WH) continue;
+          if (DIRS[d] === -1 && cur % W === 0) continue;
+          if (DIRS[d] ===  1 && nb  % W === 0) continue;
+          if (binaryArr[nb] && !lab[nb]) { lab[nb] = lbl; q.push(nb); }
+        }
+      }
+      sizes.push({ id: lbl, size: sz });
+    }
+    return { lab, sizes, nLab };
+  }
+
+  // ── Step 2: remove small fg blobs ────────────────────────────────────────
+  const minFgSize = Math.floor(WH * 0.005); // 0.5% of image
+  const { lab: fgLab, sizes: fgSizes } = labelComponents(bin);
+  const keepFg = new Set(fgSizes.filter(s => s.size >= minFgSize).map(s => s.id));
+  for (let i = 0; i < WH; i++) {
+    if (bin[i] && !keepFg.has(fgLab[i])) bin[i] = 0;
+  }
+
+  // ── Step 3: fill internal bg holes ───────────────────────────────────────
+  const bgBin = new Uint8Array(WH);
+  for (let i = 0; i < WH; i++) bgBin[i] = bin[i] ? 0 : 1;
+  const { lab: bgLab } = labelComponents(bgBin);
+
+  // Find which bg labels touch the image border
+  const borderLabels = new Set();
+  for (let x = 0; x < W; x++) {
+    borderLabels.add(bgLab[x]);           // top row
+    borderLabels.add(bgLab[(H-1)*W + x]); // bottom row
+  }
+  for (let y = 0; y < H; y++) {
+    borderLabels.add(bgLab[y * W]);         // left col
+    borderLabels.add(bgLab[y * W + W - 1]); // right col
+  }
+  borderLabels.delete(0);
+  // Any bg component not on the border → it's a hole → fill it
+  for (let i = 0; i < WH; i++) {
+    if (bgBin[i] && bgLab[i] && !borderLabels.has(bgLab[i])) bin[i] = 1;
+  }
+
+  // ── Step 4: feather only boundary pixels ─────────────────────────────────
+  const alpha = new Float32Array(WH);
+  for (let i = 0; i < WH; i++) alpha[i] = bin[i];
+
+  // 3×3 box blur
+  const blurred = new Float32Array(WH);
+  for (let y = 1; y < H-1; y++) {
+    for (let x = 1; x < W-1; x++) {
+      const ci = y*W + x;
+      let s = 0;
+      s += alpha[(y-1)*W+(x-1)] + alpha[(y-1)*W+x] + alpha[(y-1)*W+(x+1)];
+      s += alpha[y*W+(x-1)]     + alpha[ci]         + alpha[y*W+(x+1)];
+      s += alpha[(y+1)*W+(x-1)] + alpha[(y+1)*W+x] + alpha[(y+1)*W+(x+1)];
+      blurred[ci] = s / 9;
+    }
+  }
+  // Copy edges
+  for (let x = 0; x < W; x++) { blurred[x] = alpha[x]; blurred[(H-1)*W+x] = alpha[(H-1)*W+x]; }
+  for (let y = 0; y < H; y++) { blurred[y*W] = alpha[y*W]; blurred[y*W+W-1] = alpha[y*W+W-1]; }
+
+  // Apply blur only at boundary zone (where blurred is between 0.05 and 0.95)
+  const final = new Uint8Array(WH);
+  for (let i = 0; i < WH; i++) {
+    const b = blurred[i];
+    final[i] = (b > 0.05 && b < 0.95) ? Math.round(b * 255) : (bin[i] ? 255 : 0);
+  }
+  return final;
+}
+
+// ── Remove background ─────────────────────────────────────────────────────────
 goBtn.addEventListener('click', async () => {
   if (!cf) return;
   if (!aiModel || !aiProc) {
@@ -269,26 +343,20 @@ goBtn.addEventListener('click', async () => {
     errMsg.style.display = 'block'; return;
   }
 
-  goBtn.disabled         = true;
-  goBtn.textContent      = 'Processing…';
-  errMsg.style.display   = 'none';
-  resultBox.style.display = 'none';
-  progWrap.style.display = 'block';
-  progBar.style.width    = '5%';
-  statusMsg.textContent  = 'Reading image…';
+  goBtn.disabled = true; goBtn.textContent = 'Processing…';
+  errMsg.style.display = 'none'; resultBox.style.display = 'none';
+  progWrap.style.display = 'block'; progBar.style.width = '5%';
+  statusMsg.textContent = 'Reading image…';
 
   let pct = 5;
   const tick = setInterval(() => { if (pct < 75) { pct += 2; progBar.style.width = pct + '%'; } }, 300);
 
   try {
-    // 1. Read image via FileReader (no CORS/blob issues)
+    // 1. Read image
     const dataUrl = await new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onerror = rej; r.onload = e => res(e.target.result);
-      r.readAsDataURL(cf);
+      const r = new FileReader(); r.onerror = rej;
+      r.onload = e => res(e.target.result); r.readAsDataURL(cf);
     });
-
-    // 2. Draw to canvas to get pixel data + build RawImage
     const img = await new Promise((res, rej) => {
       const i = new Image(); i.onerror = rej; i.onload = () => res(i); i.src = dataUrl;
     });
@@ -300,85 +368,84 @@ goBtn.addEventListener('click', async () => {
     srcCtx.drawImage(img, 0, 0);
     const srcData = srcCtx.getImageData(0, 0, W, H).data;
 
-    // Build RGB Uint8ClampedArray for RawImage
+    // Build RawImage (RGB only)
     const rgb = new Uint8ClampedArray(W * H * 3);
     for (let i = 0; i < W * H; i++) {
-      rgb[i*3]   = srcData[i*4];
-      rgb[i*3+1] = srcData[i*4+1];
-      rgb[i*3+2] = srcData[i*4+2];
+      rgb[i*3] = srcData[i*4]; rgb[i*3+1] = srcData[i*4+1]; rgb[i*3+2] = srcData[i*4+2];
     }
     const rawImg = new RawImage(rgb, W, H, 3);
 
-    statusMsg.textContent = 'Running AI…';
-    progBar.style.width   = '30%';
+    statusMsg.textContent = 'Running AI…'; progBar.style.width = '30%';
 
-    // 3. Pre-process + run model
+    // 2. Run model
     const { pixel_values } = await aiProc(rawImg);
     const { output }       = await aiModel({ input: pixel_values });
 
     clearInterval(tick);
-    progBar.style.width   = '85%';
-    statusMsg.textContent = 'Applying mask…';
+    progBar.style.width = '82%'; statusMsg.textContent = 'Cleaning up mask…';
 
-    // 4. Extract mask tensor → Float32Array [0..1], shape [H, W]
-    const maskTensor = output[0].squeeze();          // [H, W]
-    const maskFlat   = maskTensor.data;              // Float32Array
+    // 3. Extract + resize mask to original dimensions
+    const maskTensor = output[0].squeeze();
+    const maskFlat   = maskTensor.data;      // Float32Array 0..1
     const mH = maskTensor.dims[0], mW = maskTensor.dims[1];
 
-    // 5. Resize mask to original image size via canvas
+    // Resize via canvas
     const mCanvas = document.createElement('canvas');
     mCanvas.width = mW; mCanvas.height = mH;
-    const mCtx   = mCanvas.getContext('2d');
-    const mPixels = mCtx.createImageData(mW, mH);
+    const mCtx = mCanvas.getContext('2d');
+    const mPx  = mCtx.createImageData(mW, mH);
     for (let i = 0; i < maskFlat.length; i++) {
       const v = Math.round(maskFlat[i] * 255);
-      mPixels.data[i*4] = mPixels.data[i*4+1] = mPixels.data[i*4+2] = v;
-      mPixels.data[i*4+3] = 255;
+      mPx.data[i*4] = mPx.data[i*4+1] = mPx.data[i*4+2] = v; mPx.data[i*4+3] = 255;
     }
-    mCtx.putImageData(mPixels, 0, 0);
+    mCtx.putImageData(mPx, 0, 0);
 
     const sCanvas = document.createElement('canvas');
     sCanvas.width = W; sCanvas.height = H;
     const sCtx = sCanvas.getContext('2d');
     sCtx.drawImage(mCanvas, 0, 0, W, H);
-    const maskData = sCtx.getImageData(0, 0, W, H).data;
+    const rawMask = sCtx.getImageData(0, 0, W, H).data; // RGBA, mask in R channel
 
-    // 6. Composite: original + mask as alpha
+    // Extract mask as Uint8Array (single channel, 0-255)
+    const maskU8 = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) maskU8[i] = rawMask[i * 4]; // red channel
+
+    // 4. Post-process: remove dirty spots + fill holes + feather edges
+    progBar.style.width = '88%'; statusMsg.textContent = 'Removing spots…';
+    const cleanAlpha = cleanMask(maskU8, W, H);
+
+    // 5. Composite onto output canvas
+    progBar.style.width = '95%'; statusMsg.textContent = 'Compositing…';
     outCanvas.width = W; outCanvas.height = H;
-    const outCtx  = outCanvas.getContext('2d');
+    const outCtx = outCanvas.getContext('2d');
     const outData = outCtx.createImageData(W, H);
     for (let i = 0; i < W * H; i++) {
-      outData.data[i*4]   = srcData[i*4];
-      outData.data[i*4+1] = srcData[i*4+1];
-      outData.data[i*4+2] = srcData[i*4+2];
-      outData.data[i*4+3] = maskData[i*4];   // red channel = mask value
+      const pi = i * 4;
+      outData.data[pi]   = srcData[pi];
+      outData.data[pi+1] = srcData[pi+1];
+      outData.data[pi+2] = srcData[pi+2];
+      outData.data[pi+3] = cleanAlpha[i];
     }
     outCtx.putImageData(outData, 0, 0);
 
-    progBar.style.width   = '100%';
-    statusMsg.textContent = '✅ Done!';
+    progBar.style.width = '100%'; statusMsg.textContent = '✅ Done!';
     resultLabel.textContent = '✅ Background removed!';
-
     dlBtn.onclick = () => {
       const a = document.createElement('a');
       a.download = (cf.name.replace(/\.[^.]+$/, '') || 'image') + '_nobg.png';
-      a.href = outCanvas.toDataURL('image/png');
-      a.click();
+      a.href = outCanvas.toDataURL('image/png'); a.click();
     };
-
     resultBox.style.display = 'block';
     resultBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   } catch (err) {
     clearInterval(tick);
     console.error(err);
-    progBar.style.width  = '0%';
-    statusMsg.textContent = '';
-    errMsg.textContent   = '❌ ' + (err.message || 'Something went wrong.');
+    progBar.style.width = '0%'; statusMsg.textContent = '';
+    errMsg.textContent  = '❌ ' + (err.message || 'Something went wrong.');
     errMsg.style.display = 'block';
   } finally {
-    goBtn.disabled    = false;
-    goBtn.textContent = '✨ Remove Background';
+    goBtn.disabled = false; goBtn.textContent = '✨ Remove Background';
   }
 });
 </script>
