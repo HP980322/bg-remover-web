@@ -65,12 +65,6 @@
     .btn-x{background:none;border:none;cursor:pointer;color:var(--dim);font-size:15px;padding:4px}
     .btn-x:hover{color:#e07070}
 
-    /* threshold slider */
-    .threshold-row{display:none;align-items:center;gap:10px;margin-top:.85rem}
-    .threshold-row label{font-size:.78rem;color:var(--muted);white-space:nowrap}
-    .threshold-row input[type=range]{flex:1;accent-color:var(--purple)}
-    .threshold-val{font-size:.78rem;color:#a89fff;min-width:28px;text-align:right}
-
     .btn-go{display:none;width:100%;padding:.75rem;background:var(--green);color:#fff;
       border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
       margin-top:.85rem;transition:background .15s}
@@ -87,13 +81,19 @@
     .badge{font-size:.68rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;
       color:var(--dim);background:#0d0d14}
 
-    /* result */
     .result{display:none;margin-top:1.75rem;width:100%;max-width:560px;background:var(--surface);
       border:1px solid var(--border);border-radius:20px;padding:1.5rem;text-align:center}
-    .result-label{font-size:.8rem;color:var(--muted);margin-bottom:.9rem}
+    .result-label{font-size:.8rem;color:var(--muted);margin-bottom:.75rem}
     #outCanvas{max-width:100%;border-radius:12px;border:1px solid var(--border);
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
-    .btn-dl{display:inline-block;margin-top:1rem;padding:.6rem 2rem;background:var(--green);
+
+    /* threshold slider — shown inside result card */
+    .thresh-wrap{display:flex;align-items:center;gap:10px;margin:.9rem 0}
+    .thresh-wrap label{font-size:.78rem;color:var(--muted);white-space:nowrap}
+    .thresh-wrap input[type=range]{flex:1;accent-color:var(--purple)}
+    .thresh-num{font-size:.78rem;color:#a89fff;min-width:28px;text-align:right}
+
+    .btn-dl{display:inline-block;margin-top:.75rem;padding:.6rem 2rem;background:var(--green);
       color:#fff;border:none;border-radius:8px;font-size:.88rem;font-weight:700;
       cursor:pointer;text-decoration:none;transition:background .15s}
     .btn-dl:hover{background:var(--green2)}
@@ -138,13 +138,6 @@
     <button class="btn-x" id="btnX">&#10005;</button>
   </div>
 
-  <!-- Mask threshold slider — only shown after a file is chosen -->
-  <div class="threshold-row" id="threshRow">
-    <label for="threshSlider">Edge sensitivity</label>
-    <input type="range" id="threshSlider" min="0" max="255" value="128"/>
-    <span class="threshold-val" id="threshVal">128</span>
-  </div>
-
   <button class="btn-go" id="btnGo">&#10024; Remove Background</button>
   <div class="prog-wrap" id="progWrap"><div class="prog-bar" id="progBar"></div></div>
   <p id="status"></p>
@@ -161,7 +154,12 @@
 
 <div class="result" id="result">
   <div class="result-label">&#9989; Background removed &mdash; transparent PNG ready</div>
-  <canvas id="outCanvas"></canvas><br>
+  <canvas id="outCanvas"></canvas>
+  <div class="thresh-wrap">
+    <label for="threshSlider">Edge sensitivity</label>
+    <input type="range" id="threshSlider" min="0" max="255" value="128" step="1"/>
+    <span class="thresh-num" id="threshVal">128</span>
+  </div>
   <button class="btn-dl" id="btnDl">&#8659; Download PNG</button>
 </div>
 
@@ -178,65 +176,65 @@ import { AutoModel, AutoProcessor, env, RawImage }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
 env.allowLocalModels = false;
+env.backends.onnx.wasm.proxy = false;
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
-const modelBar    = document.getElementById('modelBar');
-const mbLabel     = document.getElementById('mbLabel');
-const mbFill      = document.getElementById('mbFill');
-const mbSub       = document.getElementById('mbSub');
-const btnRetry    = document.getElementById('btnRetry');
-const dropZone    = document.getElementById('dropZone');
-const fileInput   = document.getElementById('fileInput');
-const browse      = document.getElementById('browse');
-const btnChoose   = document.getElementById('btnChoose');
-const fileRow     = document.getElementById('fileRow');
-const fName       = document.getElementById('fName');
-const fSize       = document.getElementById('fSize');
-const btnX        = document.getElementById('btnX');
-const threshRow   = document.getElementById('threshRow');
-const threshSlider= document.getElementById('threshSlider');
-const threshVal   = document.getElementById('threshVal');
-const btnGo       = document.getElementById('btnGo');
-const progWrap    = document.getElementById('progWrap');
-const progBar     = document.getElementById('progBar');
-const status      = document.getElementById('status');
-const errBox      = document.getElementById('errBox');
-const result      = document.getElementById('result');
-const outCanvas   = document.getElementById('outCanvas');
-const btnDl       = document.getElementById('btnDl');
+const $ = id => document.getElementById(id);
+const modelBar    = $('modelBar');
+const mbLabel     = $('mbLabel');
+const mbFill      = $('mbFill');
+const mbSub       = $('mbSub');
+const btnRetry    = $('btnRetry');
+const dropZone    = $('dropZone');
+const fileInput   = $('fileInput');
+const browse      = $('browse');
+const btnChoose   = $('btnChoose');
+const fileRow     = $('fileRow');
+const fName       = $('fName');
+const fSize       = $('fSize');
+const btnX        = $('btnX');
+const btnGo       = $('btnGo');
+const progWrap    = $('progWrap');
+const progBar     = $('progBar');
+const status      = $('status');
+const errBox      = $('errBox');
+const result      = $('result');
+const outCanvas   = $('outCanvas');
+const threshSlider= $('threshSlider');
+const threshVal   = $('threshVal');
+const btnDl       = $('btnDl');
 
 let model = null, processor = null, file = null;
 let loadAttempt = 0;
-// Store raw mask tensor values so we can re-apply without re-running model
-let lastMaskValues = null, lastImage = null;
+let savedMask = null;   // Float32Array 0-1, original image resolution
+let savedW = 0, savedH = 0;
+let savedPixels = null; // Uint8ClampedArray RGBA of original image
 
-// Threshold slider live update
+// ── Threshold slider ──────────────────────────────────────────────────────────
 threshSlider.oninput = () => {
   threshVal.textContent = threshSlider.value;
-  if (lastMaskValues && lastImage) applyMask(lastImage, lastMaskValues);
+  if (savedMask) renderMask();
 };
 
-// ── Progress callback ─────────────────────────────────────────────────────────
+// ── Model load ────────────────────────────────────────────────────────────────
 function onProgress(p) {
   if (p.status === 'progress' && p.total) {
-    const pct = Math.round((p.loaded / p.total) * 100);
+    const pct = Math.round(p.loaded / p.total * 100);
     mbFill.style.width = pct + '%';
-    mbSub.textContent  = `Downloading… ${pct}% (${(p.loaded/1024/1024).toFixed(1)} / ${(p.total/1024/1024).toFixed(1)} MB)`;
+    mbSub.textContent  = `Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;
   }
   if (p.status === 'done') mbSub.textContent = 'Almost ready…';
 }
 
-// ── Load model ────────────────────────────────────────────────────────────────
 async function loadModel() {
   loadAttempt++;
-  model = null; processor = null;
-  btnRetry.style.display  = 'none';
-  mbFill.style.width      = '0%';
+  model = processor = null;
+  btnRetry.style.display = 'none';
+  mbFill.style.width = '0%';
   mbFill.style.background = 'var(--purple)';
-  modelBar.style.background  = 'var(--surface2)';
-  modelBar.style.borderColor = 'var(--border)';
-  mbLabel.style.color  = '';
-  mbLabel.textContent  = loadAttempt === 1
+  modelBar.style.cssText = '';
+  mbLabel.style.color = '';
+  mbLabel.textContent = loadAttempt === 1
     ? '⏳ Loading AI model for the first time…'
     : `⏳ Loading AI model (attempt ${loadAttempt})…`;
   mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever after';
@@ -248,7 +246,6 @@ async function loadModel() {
       config: { model_type: 'custom' },
       progress_callback: onProgress,
     });
-
     processor = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
       config: {
         do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
@@ -260,56 +257,71 @@ async function loadModel() {
 
     modelBar.style.background  = '#0f1f17';
     modelBar.style.borderColor = '#1a5a3e';
-    mbLabel.textContent        = '✅ AI ready — drop an image below!';
-    mbLabel.style.color        = '#5dcaa5';
-    mbFill.style.background    = '#2d9e6b';
-    mbFill.style.width         = '100%';
-    mbSub.textContent          = loadAttempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
-    btnRetry.style.display     = 'none';
+    mbLabel.textContent = '✅ AI ready — drop an image below!';
+    mbLabel.style.color = '#5dcaa5';
+    mbFill.style.background = '#2d9e6b';
+    mbFill.style.width = '100%';
+    mbSub.textContent = loadAttempt === 1 ? 'Cached — instant on next visit' : 'Loaded!';
     dropZone.classList.remove('disabled');
     btnChoose.disabled = false;
 
   } catch (err) {
-    console.error('Model load failed (attempt ' + loadAttempt + '):', err);
+    console.error('Load failed attempt ' + loadAttempt, err);
     if (loadAttempt === 1) {
       mbLabel.textContent = '⏳ Still loading, please wait…';
       mbSub.textContent   = 'Retrying automatically…';
-      mbFill.style.width  = '0%';
       setTimeout(loadModel, 2000);
     } else {
-      mbLabel.textContent        = '❌ Could not load model.';
-      mbLabel.style.color        = '#e08090';
-      mbSub.textContent          = 'Slow connection? Click "Try again".';
-      mbFill.style.width         = '0%';
-      btnRetry.style.display     = 'inline-block';
+      mbLabel.textContent = '❌ Could not load model.';
+      mbLabel.style.color = '#e08090';
+      mbSub.textContent   = 'Click "Try again" below.';
+      btnRetry.style.display = 'inline-block';
     }
   }
 }
-btnRetry.onclick = () => loadModel();
+btnRetry.onclick = loadModel;
 loadModel();
 
+// ── File reading — use FileReader + canvas (works on GitHub Pages) ────────────
+function readFileAsRawImage(f) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = e => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const pixels = ctx.getImageData(0, 0, c.width, c.height);
+        // Build a RawImage-compatible object: data is Uint8ClampedArray RGBA
+        resolve({ width: c.width, height: c.height, pixels });
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
 // ── File pick ─────────────────────────────────────────────────────────────────
-const openPicker  = () => fileInput.click();
+const openPicker = () => fileInput.click();
 browse.onclick    = e => { e.stopPropagation(); openPicker(); };
 btnChoose.onclick = openPicker;
 dropZone.onclick  = openPicker;
 fileInput.onchange = () => pick(fileInput.files[0]);
-
 dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('over');
-  pick(e.dataTransfer.files[0]);
-});
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('over'); pick(e.dataTransfer.files[0]); });
 
 function pick(f) {
   if (!f) return;
-  file = f;
-  lastMaskValues = null; lastImage = null;
-  fName.textContent      = f.name;
-  fSize.textContent      = (f.size / 1024 / 1024).toFixed(2) + ' MB';
+  file = f; savedMask = null;
+  fName.textContent = f.name;
+  fSize.textContent = (f.size / 1048576).toFixed(2) + ' MB';
   fileRow.style.display  = 'flex';
-  threshRow.style.display = 'flex';
   btnGo.style.display    = 'block';
   result.style.display   = 'none';
   errBox.style.display   = 'none';
@@ -320,150 +332,131 @@ function pick(f) {
 
 btnX.onclick = e => {
   e.stopPropagation();
-  file = null; fileInput.value = '';
-  lastMaskValues = null; lastImage = null;
-  fileRow.style.display   = 'none';
-  threshRow.style.display = 'none';
-  btnGo.style.display     = 'none';
-  status.textContent      = '';
-  errBox.style.display    = 'none';
-  result.style.display    = 'none';
+  file = savedMask = savedPixels = null;
+  fileInput.value = '';
+  fileRow.style.display  = 'none';
+  btnGo.style.display    = 'none';
+  result.style.display   = 'none';
+  errBox.style.display   = 'none';
+  status.textContent     = '';
 };
 
-// ── Apply mask to canvas ──────────────────────────────────────────────────────
-// maskValues: Float32Array of values 0-1, same order as pixels (w*h values)
-// image: RawImage (has .width, .height, .data)
-function applyMask(image, maskValues) {
-  outCanvas.width  = image.width;
-  outCanvas.height = image.height;
+// ── Render mask onto canvas ───────────────────────────────────────────────────
+function renderMask() {
+  const threshold = parseInt(threshSlider.value) / 255;
+  outCanvas.width  = savedW;
+  outCanvas.height = savedH;
   const ctx = outCanvas.getContext('2d');
-
-  // Draw original
-  const tmpCanvas = document.createElement('canvas');
-  tmpCanvas.width  = image.width;
-  tmpCanvas.height = image.height;
-  const tmpCtx = tmpCanvas.getContext('2d');
-
-  // Build ImageData from RawImage channels
-  const imgData = tmpCtx.createImageData(image.width, image.height);
-  const src = image.data;
-  const dst = imgData.data;
-  const channels = src.length / (image.width * image.height);
-
-  for (let i = 0; i < image.width * image.height; i++) {
-    if (channels >= 3) {
-      dst[i*4]   = src[i*channels];     // R
-      dst[i*4+1] = src[i*channels+1];   // G
-      dst[i*4+2] = src[i*channels+2];   // B
-    } else {
-      // grayscale
-      dst[i*4]   = src[i*channels];
-      dst[i*4+1] = src[i*channels];
-      dst[i*4+2] = src[i*channels];
-    }
-    // Apply threshold to mask: values above threshold = opaque, below = transparent
-    const threshold = parseInt(threshSlider.value) / 255;
-    const maskVal   = maskValues[i]; // 0-1 float
-    dst[i*4+3] = maskVal >= threshold ? Math.round(maskVal * 255) : 0;
+  const out = ctx.createImageData(savedW, savedH);
+  const src = savedPixels;
+  const msk = savedMask;
+  for (let i = 0; i < savedW * savedH; i++) {
+    out.data[i*4]   = src[i*4];
+    out.data[i*4+1] = src[i*4+1];
+    out.data[i*4+2] = src[i*4+2];
+    const mv = msk[i];
+    out.data[i*4+3] = mv >= threshold ? Math.round(mv * 255) : 0;
   }
-
-  ctx.putImageData(imgData, 0, 0);
+  ctx.putImageData(out, 0, 0);
 }
 
 // ── Remove background ─────────────────────────────────────────────────────────
 btnGo.onclick = async () => {
-  if (!file || !model || !processor) return;
+  if (!file || !model || !processor) {
+    if (!model) { errBox.textContent = '⚠ Please wait for the AI model to finish loading.'; errBox.style.display = 'block'; }
+    return;
+  }
 
   btnGo.disabled         = true;
   btnGo.textContent      = 'Processing…';
   errBox.style.display   = 'none';
   progWrap.style.display = 'block';
-  progBar.style.width    = '10%';
-  status.textContent     = 'Running AI in your browser…';
+  progBar.style.width    = '8%';
+  status.textContent     = 'Reading image…';
 
-  let pct = 10;
-  const tick = setInterval(() => {
-    if (pct < 80) { pct += 2; progBar.style.width = pct + '%'; }
-  }, 200);
+  let pct = 8;
+  const tick = setInterval(() => { if (pct < 75) { pct += 1.5; progBar.style.width = pct + '%'; } }, 250);
 
   try {
-    const imgUrl = URL.createObjectURL(file);
+    // 1. Read image via canvas (no CORS issues)
+    status.textContent = 'Reading image…';
+    const { width, height, pixels } = await readFileAsRawImage(file);
+    savedPixels = pixels.data;
+    savedW = width; savedH = height;
 
-    // Load as RawImage (keeps original pixel data accessible)
-    const image = await RawImage.fromURL(imgUrl);
+    // 2. Build RawImage from RGBA pixel data for the processor
+    //    RawImage constructor: (data, width, height, channels)
+    const rgbData = new Uint8ClampedArray(width * height * 3);
+    for (let i = 0; i < width * height; i++) {
+      rgbData[i*3]   = pixels.data[i*4];
+      rgbData[i*3+1] = pixels.data[i*4+1];
+      rgbData[i*3+2] = pixels.data[i*4+2];
+    }
+    const rawImage = new RawImage(rgbData, width, height, 3);
 
-    // Pre-process & run model
-    const { pixel_values } = await processor(image);
+    status.textContent = 'Running AI in your browser…';
+    progBar.style.width = '30%';
+
+    // 3. Pre-process & run model
+    const { pixel_values } = await processor(rawImage);
     const { output }       = await model({ input: pixel_values });
 
     clearInterval(tick);
     progBar.style.width = '85%';
+    status.textContent  = 'Applying mask…';
 
-    // output[0] is the mask tensor, shape [1, 1, H, W], values 0-1
-    // Squeeze to flat Float32Array of W*H values
-    const maskTensor = output[0].squeeze();              // shape [H, W]
-    const rawMask    = maskTensor.data;                  // Float32Array, 0-1
+    // 4. Extract mask — output[0] shape: [1, 1, H, W], values 0-1
+    const maskTensor = output[0].squeeze(); // [H, W]
+    const rawMask    = maskTensor.data;     // Float32Array
+    const mW = maskTensor.dims[1];
+    const mH = maskTensor.dims[0];
 
-    // Resize mask from model size (1024x1024) back to original image size
-    // We do this by drawing into a temp canvas and reading back
-    const mW = maskTensor.dims[1]; // model output width
-    const mH = maskTensor.dims[0]; // model output height
-
-    const maskCanvas = document.createElement('canvas');
-    maskCanvas.width  = mW;
-    maskCanvas.height = mH;
-    const mCtx = maskCanvas.getContext('2d');
-    const mImg  = mCtx.createImageData(mW, mH);
+    // 5. Resize mask to original image dimensions via canvas
+    const mCanvas = document.createElement('canvas');
+    mCanvas.width = mW; mCanvas.height = mH;
+    const mCtx = mCanvas.getContext('2d');
+    const mPixels = mCtx.createImageData(mW, mH);
     for (let i = 0; i < rawMask.length; i++) {
       const v = Math.round(rawMask[i] * 255);
-      mImg.data[i*4]   = v;
-      mImg.data[i*4+1] = v;
-      mImg.data[i*4+2] = v;
-      mImg.data[i*4+3] = 255;
+      mPixels.data[i*4]   = v;
+      mPixels.data[i*4+1] = v;
+      mPixels.data[i*4+2] = v;
+      mPixels.data[i*4+3] = 255;
     }
-    mCtx.putImageData(mImg, 0, 0);
+    mCtx.putImageData(mPixels, 0, 0);
 
-    // Scale mask up to original image resolution
-    const scaledCanvas = document.createElement('canvas');
-    scaledCanvas.width  = image.width;
-    scaledCanvas.height = image.height;
-    const sCtx = scaledCanvas.getContext('2d');
-    sCtx.drawImage(maskCanvas, 0, 0, image.width, image.height);
-    const scaledMask = sCtx.getImageData(0, 0, image.width, image.height);
+    const sCanvas = document.createElement('canvas');
+    sCanvas.width = width; sCanvas.height = height;
+    const sCtx = sCanvas.getContext('2d');
+    sCtx.drawImage(mCanvas, 0, 0, width, height);
+    const scaledData = sCtx.getImageData(0, 0, width, height).data;
 
-    // Build Float32Array of 0-1 values at full image resolution
-    const maskValues = new Float32Array(image.width * image.height);
-    for (let i = 0; i < maskValues.length; i++) {
-      maskValues[i] = scaledMask.data[i*4] / 255;
-    }
+    // 6. Build Float32Array mask at full resolution
+    savedMask = new Float32Array(width * height);
+    for (let i = 0; i < savedMask.length; i++) savedMask[i] = scaledData[i*4] / 255;
 
-    // Store for threshold slider live re-apply
-    lastMaskValues = maskValues;
-    lastImage      = image;
-
-    // Apply and show result
-    applyMask(image, maskValues);
+    // 7. Render
+    renderMask();
 
     progBar.style.width = '100%';
-    status.textContent  = '✅ Done! Adjust "Edge sensitivity" slider if needed.';
+    status.textContent  = '✅ Done! Use the slider below to fine-tune edges.';
 
     btnDl.onclick = () => {
-      const a    = document.createElement('a');
+      const a = document.createElement('a');
       a.download = file.name.replace(/\.[^.]+$/, '') + '_nobg.png';
-      a.href     = outCanvas.toDataURL('image/png');
+      a.href = outCanvas.toDataURL('image/png');
       a.click();
     };
 
     result.style.display = 'block';
     result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    URL.revokeObjectURL(imgUrl);
 
   } catch (err) {
     clearInterval(tick);
     console.error(err);
     progBar.style.width  = '0%';
     status.textContent   = '';
-    errBox.textContent   = '❌ ' + (err.message || 'Something went wrong.');
+    errBox.textContent   = '❌ ' + (err.message || 'Something went wrong. Please try again.');
     errBox.style.display = 'block';
   } finally {
     btnGo.disabled    = false;
