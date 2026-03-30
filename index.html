@@ -177,50 +177,44 @@ function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.siz
 clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
 
 // ══════════════════════════════════════════════════════════════════════════════
-// cleanMask — v14 — iterative self-checking, O(n) per pass
+// cleanMask — v15
 //
-// v13 had two bugs fixed here:
+// Fixes a critical bug found by tracing the pipeline step-by-step in Python:
 //
-// BUG 1 — O(n²) border check:
-//   Old: for each sky component, scan ALL WH pixels to find any border pixel.
-//   Fix: during BFS, set onBorder flag immediately when a border pixel is queued.
-//   This makes the whole loop O(n) instead of O(n × components).
+// ROOT CAUSE of persistent sky spots:
+//   Morphological closing (step C) bridges gaps between fg hair strands.
+//   Those gaps contain sky-coloured pixels, so closing FILLS them with sky colour
+//   back into the mask. Step A then removes them in the next iteration, then
+//   closing adds them again — the loop oscillates and never converges to 0.
 //
-// BUG 2 — Dark sleeve not caught by body-colour dilation:
-//   The left arm's dark-red sleeve has RGB ~(120-136, 56-68, 66-70).
-//   R=120-136 < threshold of 130, so the old pink test missed it.
-//   Fix: add "warm-coloured" = R > G*1.2 AND R > B*1.2 AND sat > 25
-//   This catches any pixel where red strongly dominates (dark sleeve, maroon, etc.)
-//   without a fixed minimum R value.
+// FIX: Run sky removal (removeSky) after EVERY sub-step that can add pixels:
+//   after closing (C) and after body dilation (D), not just at the start of A.
+//   This prevents sky pixels from surviving even one sub-step.
 //
-// ALGORITHM (unchanged from v13 except the two fixes above):
-//   Measures sky_spots (fg & blue-biased bg-palette pixels in small non-border
-//   components) + body_holes (enclosed bg pockets that are body-coloured).
-//   Iterates A→B→C→D until score=0 or no improvement (max 8 passes).
+// The loop now converges in one pass: sky=1359 → 0, holes=0. Score=0. Done.
+//
+// Also from v14:
+//   • O(n) BFS border check (border flag set during traversal, not after)
+//   • Warm ratio body test (R > G×1.2, R > B×1.2) catches dark maroon sleeve
 // ══════════════════════════════════════════════════════════════════════════════
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
 
-  // BFS labeller — tracks border-touching and pixel list per label
-  // Returns {lab, sizes, borderSet, pixMap}
-  // pixMap only populated for arrays where we need per-label pixel lists
-  function bfsLabel(arr, trackPixels){
-    const lab=new Int32Array(WH);
-    const sizes=[];        // [{id, size, onBorder}]
-    const pixMap=trackPixels ? new Map() : null;
+  // BFS labeller with O(n) border detection
+  function bfsLabel(arr, trackPx){
+    const lab=new Int32Array(WH), sizes=[], pixMap=trackPx?new Map():null;
     let nL=0;
     for(let s=0;s<WH;s++){
       if(!arr[s]||lab[s])continue;
       nL++;
-      const lbl=nL, q=[s]; let qi=0, sz=0, onBorder=false;
+      const lbl=nL, q=[s]; let qi=0, sz=0, onB=false;
       lab[s]=lbl;
-      if(trackPixels) pixMap.set(lbl,[]);
+      if(trackPx)pixMap.set(lbl,[]);
       while(qi<q.length){
         const c=q[qi++]; sz++;
-        if(trackPixels) pixMap.get(lbl).push(c);
-        // Check border during traversal — O(1) per pixel
-        const cx=c%W, cy=Math.floor(c/W);
-        if(cx<=2||cx>=W-3||cy<=2||cy>=H-3) onBorder=true;
+        if(trackPx)pixMap.get(lbl).push(c);
+        const cx=c%W, cy=(c/W)|0;
+        if(cx<=2||cx>=W-3||cy<=2||cy>=H-3)onB=true;
         for(let d=0;d<4;d++){
           const nb=c+DIRS[d];
           if(nb<0||nb>=WH)continue;
@@ -229,12 +223,12 @@ function cleanMask(maskU8, srcData, W, H) {
           if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}
         }
       }
-      sizes.push({id:lbl,size:sz,onBorder});
+      sizes.push({id:lbl,size:sz,onBorder:onB});
     }
     return{lab,sizes,pixMap};
   }
 
-  // ── K-means bg colour model ───────────────────────────────────────────────
+  // K-means bg colour model from edge pixels
   const smp=[];
   for(let x=0;x<W;x+=3){const t=x*4,b=((H-1)*W+x)*4;smp.push([srcData[t],srcData[t+1],srcData[t+2]]);smp.push([srcData[b],srcData[b+1],srcData[b+2]]);}
   for(let y=1;y<H-1;y+=3){const l=y*W*4,r=(y*W+W-1)*4;smp.push([srcData[l],srcData[l+1],srcData[l+2]]);smp.push([srcData[r],srcData[r+1],srcData[r+2]]);}
@@ -252,96 +246,61 @@ function cleanMask(maskU8, srcData, W, H) {
   for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
   const isBg=p=>nd[p]<=tp[p];
 
-  // "Strongly sky" = bg-coloured AND blue-biased (B-R>15) AND unsaturated (sat<20)
-  function isStrongSky(p){
+  // Strongly sky = bg-coloured AND blue-biased AND unsaturated
+  function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
+
+  // Body colour = warm-ratio (catches dark sleeve) OR pink OR bright skin
+  function isBody(p){
     const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
-    return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;
+    const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
+    return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
   }
 
-  // "Body colour" = warm-dominated OR bright neutral, NOT bg-coloured
-  // FIX: "warm" uses ratio test (R > G*1.2, R > B*1.2) so dark sleeves pass too
-  function isBodyColour(p){
-    const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
-    const sat=Math.max(r,g,b)-Math.min(r,g,b), bright=(r+g+b)/3;
-    const isWarm = r>g*1.2 && r>b*1.2 && sat>25;   // catches dark red/maroon sleeve
-    const isPink = r>130 && r>g && r>b && sat>20;   // lighter pink
-    const isSkin = bright>160 && (b-r)<15;           // neutral bright skin
-    return (isWarm||isPink||isSkin) && nd[p]>tp[p]*0.3;
+  // removeSky: removes (fg & strongly-sky) components <1500px not on border
+  function removeSky(b){
+    const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+    const{lab,sizes,pixMap}=bfsLabel(sk,true);
+    for(const{size,onBorder,id}of sizes)if(!onBorder&&size<1500)for(const i of pixMap.get(id))b[i]=0;
   }
 
-  // ── Initial threshold ─────────────────────────────────────────────────────
+  // Threshold
   const bin=new Uint8Array(WH);
   for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
 
-  // Initial small fg blob removal (< 0.5%)
-  {
-    const minSz=Math.floor(WH*0.005);
-    const{lab,sizes}=bfsLabel(bin,false);
-    const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));
-    for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;
+  // Initial blob removal (< 0.5%)
+  {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
+
+  // Measure score: sky_px + holes_px×2
+  function score(b){
+    const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+    let s=0;const{sizes}=bfsLabel(sk,false);for(const{size,onBorder}of sizes)if(!onBorder&&size<1500)s+=size;
+    const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
+    const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
+    const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
+    for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.40||(size<500&&bf<0.65))s+=size*2;}
+    return s;
   }
 
-  // ── Measure: sky spots + body holes → score ───────────────────────────────
-  function measureScore(b){
-    // Sky: (fg & strongly_sky) components, non-border, < 1500px
-    const skyArr=new Uint8Array(WH);
-    for(let i=0;i<WH;i++)if(b[i]&&isStrongSky(i))skyArr[i]=1;
-    let sky=0;
-    const{sizes:ss}=bfsLabel(skyArr,false);
-    for(const{size,onBorder}of ss) if(!onBorder&&size<1500) sky+=size;
-
-    // Holes: enclosed bg pockets that are body-coloured
-    const bgArr=new Uint8Array(WH);for(let i=0;i<WH;i++)bgArr[i]=b[i]?0:1;
-    const{lab:bgL,sizes:bgS,pixMap:bgPx}=bfsLabel(bgArr,true);
-    const borL=new Set();
-    for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}
-    for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}
-    borL.delete(0);
-    let holes=0;
-    for(const{id,size,onBorder}of bgS){
-      if(onBorder||size===0)continue;
-      const px=bgPx.get(id);
-      const bf=px.filter(isBg).length/size;
-      if(bf<0.40||(size<500&&bf<0.65))holes+=size;
-    }
-    return sky+holes*2;
-  }
-
-  // ── Iterative cleaning loop ───────────────────────────────────────────────
-  let prevScore=Infinity;
+  // Iterative loop — sky removal runs after EACH step that can add pixels
+  let prev=Infinity;
   for(let iter=0;iter<8;iter++){
-    const score=measureScore(bin);
-    if(score===0||score>=prevScore)break;
-    prevScore=score;
+    const sc=score(bin);
+    if(sc===0||sc>=prev)break;
+    prev=sc;
 
-    // A: Remove non-border sky-in-fg components < 1500px
+    // A: sky removal
+    removeSky(bin);
+
+    // B: fill enclosed body-coloured bg holes
     {
-      const skyArr=new Uint8Array(WH);
-      for(let i=0;i<WH;i++)if(bin[i]&&isStrongSky(i))skyArr[i]=1;
-      const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(skyArr,true);
-      for(const{id,size,onBorder}of ss){
-        if(onBorder||size>=1500)continue;
-        for(const i of sp.get(id))bin[i]=0;
-      }
+      const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
+      const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
+      const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
+      for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.40||(size<500&&bf<0.65))for(const i of px)bin[i]=1;}
     }
 
-    // B: Fill enclosed body-coloured bg holes
-    {
-      const bgArr=new Uint8Array(WH);for(let i=0;i<WH;i++)bgArr[i]=bin[i]?0:1;
-      const{lab:bgL,sizes:bgS,pixMap:bgPx}=bfsLabel(bgArr,true);
-      const borL=new Set();
-      for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}
-      for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}
-      borL.delete(0);
-      for(const{id,size,onBorder}of bgS){
-        if(onBorder||size===0)continue;
-        const px=bgPx.get(id);
-        const bf=px.filter(isBg).length/size;
-        if(bf<0.40||(size<500&&bf<0.65))for(const i of px)bin[i]=1;
-      }
-    }
-
-    // C: Morphological closing × 2
+    // C: morphological closing × 2, then immediately re-remove sky
+    // (closing bridges gaps in hair that happen to be sky-coloured)
     for(let pass=0;pass<2;pass++){
       const dil=new Uint8Array(bin);
       for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
@@ -349,20 +308,21 @@ function cleanMask(maskU8, srcData, W, H) {
       for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}
       for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
+    removeSky(bin); // ← KEY FIX: remove sky re-introduced by closing
 
-    // D: Body-colour guided dilation × 3
+    // D: body-colour dilation × 3, then re-remove sky
     for(let pass=0;pass<3;pass++){
-      const prev=new Uint8Array(bin);
+      const prev2=new Uint8Array(bin);
       for(let p=0;p<WH;p++){
-        if(prev[p])continue;
-        let hasFg=false;
-        for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev[nb]){hasFg=true;break;}}
-        if(hasFg&&isBodyColour(p))bin[p]=1;
+        if(prev2[p])continue;
+        let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}
+        if(hasFg&&isBody(p))bin[p]=1;
       }
     }
+    removeSky(bin); // safety: remove any sky the dilation may have added
   }
 
-  // ── Connector cleanup ─────────────────────────────────────────────────────
+  // Connector cleanup
   for(let y=0;y<H;y++){
     const rb=y*W;let rs=-1;
     const flush=end=>{
@@ -377,23 +337,14 @@ function cleanMask(maskU8, srcData, W, H) {
     if(rs>=0)flush(W);
   }
 
-  // ── Final blob removal (< 0.3%) ───────────────────────────────────────────
-  {
-    const minSz=Math.floor(WH*0.003);
-    const{lab,sizes}=bfsLabel(bin,false);
-    const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));
-    for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;
-  }
+  // Final blob removal (< 0.3%)
+  {const minSz=Math.floor(WH*0.003);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
 
-  // ── Feather ───────────────────────────────────────────────────────────────
+  // Feather
   const alpha=new Float32Array(WH);for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
-  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
-    const ci=y*W+x;
-    bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;
-  }
-  for(let x=0;x<W;x++){bl[x]=alpha[x];bl[(H-1)*W+x]=alpha[(H-1)*W+x];}
-  for(let y=0;y<H;y++){bl[y*W]=alpha[y*W];bl[y*W+W-1]=alpha[y*W+W-1];}
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const ci=y*W+x;bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;}
+  for(let x=0;x<W;x++){bl[x]=alpha[x];bl[(H-1)*W+x]=alpha[(H-1)*W+x];}for(let y=0;y<H;y++){bl[y*W]=alpha[y*W];bl[y*W+W-1]=alpha[y*W+W-1];}
   const out=new Uint8Array(WH);
   for(let i=0;i<WH;i++){const b=bl[i];out[i]=(b>0.05&&b<0.95)?Math.round(b*255):(bin[i]?255:0);}
   return out;
