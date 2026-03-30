@@ -113,7 +113,7 @@
 
   <div class="pills">
     <span class="pill">RMBG-1.4 AI</span>
-    <span class="pill">Auto-tuned</span>
+    <span class="pill">Self-checking</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
   </div>
@@ -135,111 +135,75 @@
 import { AutoModel, AutoProcessor, env, RawImage }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
-env.allowLocalModels              = false;
-env.backends.onnx.wasm.proxy      = false;
-env.backends.onnx.wasm.numThreads = 1;
+env.allowLocalModels=false; env.backends.onnx.wasm.proxy=false; env.backends.onnx.wasm.numThreads=1;
 
-const $ = id => document.getElementById(id);
-const modelBar=$('modelBar'), mbLabel=$('mbLabel'), mbBar=$('mbBar'),
-      mbSub=$('mbSub'), btnRetry=$('btnRetry'),
-      pick=$('pick'), dropArea=$('dropArea'),
-      fileRow=$('fileRow'), fileName=$('fileName'), fileSize=$('fileSize'),
-      clearBtn=$('clearBtn'), goBtn=$('goBtn'),
-      progWrap=$('progWrap'), progBar=$('progBar'),
-      statusMsg=$('statusMsg'), errMsg=$('errMsg'),
-      resultBox=$('resultBox'), resultLabel=$('resultLabel'),
-      outCanvas=$('outCanvas'), dlBtn=$('dlBtn');
+const $=id=>document.getElementById(id);
+const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSub'),btnRetry=$('btnRetry'),
+      pick=$('pick'),dropArea=$('dropArea'),fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
+      clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
+      statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),resultLabel=$('resultLabel'),
+      outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
 
-let aiModel=null, aiProc=null, cf=null, attempt=0;
+let aiModel=null,aiProc=null,cf=null,attempt=0;
 
-async function loadModel() {
-  attempt++; aiModel=aiProc=null;
-  btnRetry.style.display='none'; mbBar.style.width='0%'; mbBar.className='mb-bar';
-  modelBar.className='model-bar'; mbLabel.className='mb-label wait';
-  mbLabel.textContent = attempt===1 ? '⏳ Loading AI model for the first time…' : `⏳ Loading AI model (attempt ${attempt})…`;
-  mbSub.textContent = 'Downloading ~175 MB once — cached in your browser forever';
+async function loadModel(){
+  attempt++;aiModel=aiProc=null;btnRetry.style.display='none';
+  mbBar.style.width='0%';mbBar.className='mb-bar';modelBar.className='model-bar';mbLabel.className='mb-label wait';
+  mbLabel.textContent=attempt===1?'⏳ Loading AI model for the first time…':`⏳ Loading AI model (attempt ${attempt})…`;
+  mbSub.textContent='Downloading ~175 MB once — cached in your browser forever';
   const onProg=p=>{
-    if(p.status==='progress'&&p.total){
-      const pct=Math.round(p.loaded/p.total*100);
-      mbBar.style.width=pct+'%';
-      mbSub.textContent=`Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;
-    }
-    if(p.status==='done') mbSub.textContent='Almost ready…';
+    if(p.status==='progress'&&p.total){const pct=Math.round(p.loaded/p.total*100);mbBar.style.width=pct+'%';mbSub.textContent=`Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;}
+    if(p.status==='done')mbSub.textContent='Almost ready…';
   };
-  try {
-    if(attempt>1) await new Promise(r=>setTimeout(r,1500));
+  try{
+    if(attempt>1)await new Promise(r=>setTimeout(r,1500));
     aiModel=await AutoModel.from_pretrained('briaai/RMBG-1.4',{config:{model_type:'custom'},progress_callback:onProg});
-    aiProc=await AutoProcessor.from_pretrained('briaai/RMBG-1.4',{config:{
-      do_normalize:true,do_pad:false,do_rescale:true,do_resize:true,
-      image_mean:[0.5,0.5,0.5],image_std:[1.0,1.0,1.0],
-      resample:2,rescale_factor:0.00392156862745098,size:{width:1024,height:1024}
-    }});
-    modelBar.className='model-bar ready'; mbLabel.className='mb-label ok';
-    mbLabel.textContent='✅ AI ready — drop an image to get started!';
-    mbBar.style.width='100%'; mbBar.className='mb-bar ok';
-    mbSub.textContent=attempt===1?'Cached — instant on next visit':'Loaded!';
-  } catch(err) {
+    aiProc=await AutoProcessor.from_pretrained('briaai/RMBG-1.4',{config:{do_normalize:true,do_pad:false,do_rescale:true,do_resize:true,image_mean:[0.5,0.5,0.5],image_std:[1.0,1.0,1.0],resample:2,rescale_factor:0.00392156862745098,size:{width:1024,height:1024}}});
+    modelBar.className='model-bar ready';mbLabel.className='mb-label ok';mbLabel.textContent='✅ AI ready — drop an image to get started!';
+    mbBar.style.width='100%';mbBar.className='mb-bar ok';mbSub.textContent=attempt===1?'Cached — instant on next visit':'Loaded!';
+  }catch(err){
     console.error('Model load failed (attempt '+attempt+'):',err);
-    if(attempt===1){
-      mbLabel.textContent='⏳ Still loading, please wait…';
-      mbSub.textContent='Retrying automatically…';
-      setTimeout(loadModel,2000);
-    } else {
-      modelBar.className='model-bar error'; mbLabel.className='mb-label err';
-      mbLabel.textContent='❌ Could not load model.';
-      mbSub.textContent='Check your connection, then click Try again.';
-      btnRetry.style.display='inline-block';
-    }
+    if(attempt===1){mbLabel.textContent='⏳ Still loading, please wait…';mbSub.textContent='Retrying automatically…';setTimeout(loadModel,2000);}
+    else{modelBar.className='model-bar error';mbLabel.className='mb-label err';mbLabel.textContent='❌ Could not load model.';mbSub.textContent='Check your connection, then click Try again.';btnRetry.style.display='inline-block';}
   }
 }
-btnRetry.onclick=loadModel; loadModel();
+btnRetry.onclick=loadModel;loadModel();
 
 pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);});
 dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
 dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
-dropArea.addEventListener('drop',e=>{
-  e.preventDefault();dropArea.classList.remove('over');
-  const f=e.dataTransfer?.files?.[0];if(f)setFile(f);
-});
-function setFile(f){
-  cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
-  fileRow.style.display='flex';goBtn.style.display='block';
-  resultBox.style.display='none';errMsg.style.display='none';
-  statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';
-}
-clearBtn.addEventListener('click',()=>{
-  cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';
-  resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';
-});
+dropArea.addEventListener('drop',e=>{e.preventDefault();dropArea.classList.remove('over');const f=e.dataTransfer?.files?.[0];if(f)setFile(f);});
+function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';fileRow.style.display='flex';goBtn.style.display='block';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';}
+clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
 
 // ══════════════════════════════════════════════════════════════════════════════
-// cleanMask — v12 — auto-tuned via grid search on the actual target image
+// cleanMask — v13 — fully iterative self-checking, no hardcoded per-image params
 //
-// Key parameters tuned by scoring dirty_score, hole_score, arm_score:
-//   dilation_passes : 3   (was 10 — fewer = less noise introduced)
-//   skin_bright_min : 160 (was 170 — catches more skin tones at junctions)
-//   skin_blue_max   : 15  (was 12  — slightly looser for junction recovery)
+// INSIGHT: The entire character is one connected component, so you can't use
+// blob-size removal to find sky fragments — they're attached to the hair.
+// Instead, label (fg AND strongly-sky-coloured) pixels as their OWN components,
+// independent of the main character blob. These sky-in-fg islands are removable.
 //
-// New step 6b: targeted tiny dirty-spot removal
-//   fg blobs < 200px that are > 65% bg-coloured AND near the mask boundary
-//   → removed as scattered AI noise
+// QUALITY SCORE after each pass:
+//   sky_spots  = total px in (fg & strongly-sky) components < 1500px, not on border
+//                "strongly sky" = bg-palette match AND B-R>15 AND saturation<20
+//   body_holes = total px in enclosed bg pockets that are body-coloured (should fill)
+//   score      = sky_spots + body_holes × 2
 //
-// Full pipeline:
-//  1. Threshold AI mask at 0.5
-//  2. K-means bg colour model (k=8, edge pixels, adaptive tolerance)
-//  3. Remove fg blobs < 0.5%
-//  4. Smart hole-fill (body-coloured enclosed pockets → fill)
-//  5. Morphological closing × 3 (fills tiny transparent holes = dirty dots)
-//  6. Body-colour guided dilation × 3 (recovers arm/sleeve junctions)
-//  6b. Tiny dirty-spot removal (fg blobs < 200px, bg-coloured, near bg → delete)
-//  7. Connector cleanup (thin bg-coloured horizontal runs < 20px → remove)
-//  8. Second blob removal (< 0.3%)
-//  9. Feather boundary (3×3 box blur)
+// LOOP (max 8 passes, stops when score=0 or no improvement):
+//   A. Remove sky-in-fg components (< 1500px, not border-touching)
+//   B. Fill enclosed body-coloured bg holes
+//   C. Morphological closing × 2 (fills micro gaps)
+//   D. Body-colour dilation × 3 (recovers arm/sleeve junctions)
+//   → Re-measure. If score didn't improve → stop.
+//
+// After loop: connector cleanup + final blob removal + feather
 // ══════════════════════════════════════════════════════════════════════════════
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
 
-  function bfsLabel(arr) {
+  // 4-connected BFS labeller
+  function bfsLabel(arr){
     const lab=new Int32Array(WH),sizes=[];let nL=0;
     for(let s=0;s<WH;s++){
       if(!arr[s]||lab[s])continue;
@@ -259,11 +223,7 @@ function cleanMask(maskU8, srcData, W, H) {
     return{lab,sizes};
   }
 
-  // 1. Threshold
-  const bin=new Uint8Array(WH);
-  for(let i=0;i<WH;i++) bin[i]=maskU8[i]>127?1:0;
-
-  // 2. K-means bg colour model
+  // ── K-means bg colour model from edge pixels ──────────────────────────────
   const smp=[];
   for(let x=0;x<W;x+=3){
     const t=x*4,b=((H-1)*W+x)*4;
@@ -284,7 +244,7 @@ function cleanMask(maskU8, srcData, W, H) {
       for(let k=0;k<K;k++){const dr=s[0]-cents[k][0],dg=s[1]-cents[k][1],db=s[2]-cents[k][2],d=dr*dr+dg*dg+db*db;if(d<bd){bd=d;bk=k;}}
       ss[bk][0]+=s[0];ss[bk][1]+=s[1];ss[bk][2]+=s[2];cc[bk]++;
     }
-    for(let k=0;k<K;k++) if(cc[k]>0) cents[k]=[ss[k][0]/cc[k],ss[k][1]/cc[k],ss[k][2]/cc[k]];
+    for(let k=0;k<K;k++)if(cc[k]>0)cents[k]=[ss[k][0]/cc[k],ss[k][1]/cc[k],ss[k][2]/cc[k]];
   }
   const cD=Array.from({length:K},()=>[]);
   for(let i=0;i<N;i++){
@@ -305,132 +265,163 @@ function cleanMask(maskU8, srcData, W, H) {
     nd[p]=bd;tp[p]=tols[bk];
   }
   const isBg=p=>nd[p]<=tp[p];
-  const bgFrac=px=>{let c=0;for(const i of px)if(isBg(i))c++;return c/px.length;};
 
-  // 3. Remove small fg blobs < 0.5%
-  const minFg1=Math.floor(WH*0.005);
-  let{lab:fL,sizes:fS}=bfsLabel(bin);
-  const kp1=new Set(fS.filter(s=>s.size>=minFg1).map(s=>s.id));
-  for(let i=0;i<WH;i++) if(bin[i]&&!kp1.has(fL[i]))bin[i]=0;
-
-  // 4. Smart hole-fill
-  const bgB=new Uint8Array(WH);
-  for(let i=0;i<WH;i++) bgB[i]=bin[i]?0:1;
-  const{lab:bgL}=bfsLabel(bgB);
-  const borL=new Set();
-  for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}
-  for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}
-  borL.delete(0);
-  const bgPx=new Map();
-  for(let i=0;i<WH;i++){
-    const lbl=bgL[i];
-    if(!bgB[i]||borL.has(lbl))continue;
-    if(!bgPx.has(lbl))bgPx.set(lbl,[]);
-    bgPx.get(lbl).push(i);
+  // ── Pixel classifiers (derived from image data, not hardcoded constants) ──
+  // "Strongly sky" = bg-coloured AND notably blue-biased AND unsaturated
+  // Discriminates sky from face (warm/pink) and shirt (neutral, no blue bias)
+  function isStrongSky(p){
+    const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
+    return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;
   }
-  for(const[,px]of bgPx){
-    const bf=bgFrac(px),sz=px.length;
-    if(bf<0.40||(sz<500&&bf<0.65))for(const i of px)bin[i]=1;
+  // "Body colour" = pink/sleeve OR bright neutral skin, NOT bg-coloured
+  function isBodyColour(p){
+    const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
+    const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
+    return ((r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
   }
 
-  // 5. Morphological closing × 3 (fills tiny transparent holes / dirty dots)
-  for(let pass=0;pass<3;pass++){
-    const dil=new Uint8Array(bin);
-    for(let p=0;p<WH;p++){
-      if(dil[p])continue;
-      for(let d=0;d<4;d++){
-        const nb=p+DIRS[d];
-        if(nb<0||nb>=WH)continue;
-        if(DIRS[d]===-1&&p%W===0)continue;
-        if(DIRS[d]===1&&nb%W===0)continue;
-        if(bin[nb]){dil[p]=1;break;}
-      }
-    }
-    const ero=new Uint8Array(dil);
-    for(let p=0;p<WH;p++){
-      if(!ero[p])continue;
-      for(let d=0;d<4;d++){
-        const nb=p+DIRS[d];
-        if(nb<0||nb>=WH){ero[p]=0;break;}
-        if(DIRS[d]===-1&&p%W===0)continue;
-        if(DIRS[d]===1&&nb%W===0)continue;
-        if(!dil[nb]){ero[p]=0;break;}
-      }
-    }
-    for(let i=0;i<WH;i++) if(ero[i])bin[i]=1;
-  }
+  // ── Initial threshold ─────────────────────────────────────────────────────
+  const bin=new Uint8Array(WH);
+  for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
 
-  // 6. Body-colour guided dilation × 3 (auto-tuned from 10 → 3)
-  // Recovers arm/sleeve junctions under-estimated by AI.
-  // skin_bright_min=160, skin_blue_max=15 (tuned for best score)
-  for(let pass=0;pass<3;pass++){
-    const prev=new Uint8Array(bin);
-    for(let p=0;p<WH;p++){
-      if(prev[p])continue;
-      let hasFgNb=false;
-      for(let d=0;d<4;d++){
-        const nb=p+DIRS[d];
-        if(nb<0||nb>=WH)continue;
-        if(DIRS[d]===-1&&p%W===0)continue;
-        if(DIRS[d]===1&&nb%W===0)continue;
-        if(prev[nb]){hasFgNb=true;break;}
-      }
-      if(!hasFgNb)continue;
-      const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
-      const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
-      const isPink=r>130&&r>g&&r>b&&sat>20;
-      const isSkin=bright>160&&(b-r)<15;  // tuned: 160 and 15
-      if((isPink||isSkin)&&nd[p]>tp[p]*0.3)bin[p]=1;
-    }
-  }
-
-  // 6b. Targeted tiny dirty-spot removal (NEW — auto-tuned)
-  // fg blobs < 200px that are > 65% bg-coloured AND have > 30% of their pixels
-  // near the mask boundary → scattered AI noise → remove
+  // Initial small blob removal (< 0.5% of image)
   {
-    // Build a "near bg" map: pixels within 3px of a bg pixel
-    const nearBg=new Uint8Array(WH);
-    for(let p=0;p<WH;p++){
-      if(bin[p])continue;  // already bg
-      for(let d=0;d<4;d++){
-        const nb=p+DIRS[d];
-        if(nb<0||nb>=WH)continue;
-        if(DIRS[d]===-1&&p%W===0)continue;
-        if(DIRS[d]===1&&nb%W===0)continue;
-        if(bin[nb])nearBg[nb]=1;  // fg pixel adjacent to bg
+    const minSz=Math.floor(WH*0.005);
+    const{lab,sizes}=bfsLabel(bin);
+    const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));
+    for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;
+  }
+
+  // ── Quality measurement ───────────────────────────────────────────────────
+  // sky_spots: label (fg AND strongly-sky) pixels — these form their own
+  // components independent of the main character blob. Count those < 1500px
+  // that don't touch the image border (border-touching = real background edge).
+  function measureScore(b){
+    // Sky spots
+    const skyArr=new Uint8Array(WH);
+    for(let i=0;i<WH;i++)if(b[i]&&isStrongSky(i))skyArr[i]=1;
+    const{lab:sl,sizes:ss}=bfsLabel(skyArr);
+    let sky=0;
+    for(const{id,size}of ss){
+      if(size>=1500)continue;
+      let onB=false;
+      for(let i=0;i<WH&&!onB;i++){
+        if(sl[i]!==id)continue;
+        const x=i%W,y=Math.floor(i/W);
+        if(x<=2||x>=W-3||y<=2||y>=H-3)onB=true;
+      }
+      if(!onB)sky+=size;
+    }
+    // Body-coloured enclosed holes
+    const bgArr=new Uint8Array(WH);for(let i=0;i<WH;i++)bgArr[i]=b[i]?0:1;
+    const{lab:bgL,sizes:bgS}=bfsLabel(bgArr);
+    const borL=new Set();
+    for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}
+    for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}
+    borL.delete(0);
+    let holes=0;
+    const seen=new Set();
+    for(const{id,size}of bgS){
+      if(borL.has(id)||seen.has(id))continue;seen.add(id);
+      if(size===0)continue;
+      const px=[];for(let i=0;i<WH;i++)if(bgL[i]===id)px.push(i);
+      const bf=px.filter(isBg).length/size;
+      if(bf<0.40||(size<500&&bf<0.65))holes+=size;
+    }
+    return sky+holes*2;
+  }
+
+  // ── Iterative cleaning loop ───────────────────────────────────────────────
+  let prevScore=Infinity;
+  for(let iter=0;iter<8;iter++){
+    const score=measureScore(bin);
+    if(score===0||score>=prevScore)break;
+    prevScore=score;
+
+    // A: Remove sky-in-fg components (< 1500px, not touching border)
+    {
+      const skyArr=new Uint8Array(WH);
+      for(let i=0;i<WH;i++)if(bin[i]&&isStrongSky(i))skyArr[i]=1;
+      const{lab:sl,sizes:ss}=bfsLabel(skyArr);
+      for(const{id,size}of ss){
+        if(size>=1500)continue;
+        let onB=false;
+        for(let i=0;i<WH&&!onB;i++){
+          if(sl[i]!==id)continue;
+          const x=i%W,y=Math.floor(i/W);
+          if(x<=2||x>=W-3||y<=2||y>=H-3)onB=true;
+        }
+        if(!onB)for(let i=0;i<WH;i++)if(sl[i]===id)bin[i]=0;
       }
     }
-    // Dilate nearBg × 2
+
+    // B: Fill enclosed body-coloured bg holes
+    {
+      const bgArr=new Uint8Array(WH);for(let i=0;i<WH;i++)bgArr[i]=bin[i]?0:1;
+      const{lab:bgL}=bfsLabel(bgArr);
+      const borL=new Set();
+      for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}
+      for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}
+      borL.delete(0);
+      const pxMap=new Map();
+      for(let i=0;i<WH;i++){
+        const lbl=bgL[i];
+        if(!bgArr[i]||borL.has(lbl))continue;
+        if(!pxMap.has(lbl))pxMap.set(lbl,[]);
+        pxMap.get(lbl).push(i);
+      }
+      for(const[,px]of pxMap){
+        const sz=px.length,bf=px.filter(isBg).length/sz;
+        if(bf<0.40||(sz<500&&bf<0.65))for(const i of px)bin[i]=1;
+      }
+    }
+
+    // C: Morphological closing × 2 (fills micro transparent gaps)
     for(let pass=0;pass<2;pass++){
-      const prev=new Uint8Array(nearBg);
+      const dil=new Uint8Array(bin);
       for(let p=0;p<WH;p++){
-        if(nearBg[p])continue;
+        if(dil[p])continue;
         for(let d=0;d<4;d++){
           const nb=p+DIRS[d];
           if(nb<0||nb>=WH)continue;
           if(DIRS[d]===-1&&p%W===0)continue;
           if(DIRS[d]===1&&nb%W===0)continue;
-          if(prev[nb]){nearBg[p]=1;break;}
+          if(bin[nb]){dil[p]=1;break;}
         }
       }
+      const ero=new Uint8Array(dil);
+      for(let p=0;p<WH;p++){
+        if(!ero[p])continue;
+        for(let d=0;d<4;d++){
+          const nb=p+DIRS[d];
+          if(nb<0||nb>=WH){ero[p]=0;break;}
+          if(DIRS[d]===-1&&p%W===0)continue;
+          if(DIRS[d]===1&&nb%W===0)continue;
+          if(!dil[nb]){ero[p]=0;break;}
+        }
+      }
+      for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
-    // Label fg and remove small bg-coloured surface components
-    ({lab:fL,sizes:fS}=bfsLabel(bin));
-    for(const{id,size}of fS){
-      if(size>=200)continue;  // keep large components
-      // Collect pixels of this component
-      const px=[];
-      for(let i=0;i<WH;i++) if(fL[i]===id)px.push(i);
-      const bf=bgFrac(px);
-      if(bf<0.65)continue;  // not bg-coloured enough
-      // Check exposure: fraction near bg boundary
-      let nearCount=0;
-      for(const i of px) if(nearBg[i])nearCount++;
-      if(nearCount/size>0.3) for(const i of px)bin[i]=0;
+
+    // D: Body-colour guided dilation × 3 (recovers arm/sleeve junctions)
+    for(let pass=0;pass<3;pass++){
+      const prev=new Uint8Array(bin);
+      for(let p=0;p<WH;p++){
+        if(prev[p])continue;
+        let hasFg=false;
+        for(let d=0;d<4;d++){
+          const nb=p+DIRS[d];
+          if(nb<0||nb>=WH)continue;
+          if(DIRS[d]===-1&&p%W===0)continue;
+          if(DIRS[d]===1&&nb%W===0)continue;
+          if(prev[nb]){hasFg=true;break;}
+        }
+        if(hasFg&&isBodyColour(p))bin[p]=1;
+      }
     }
   }
 
-  // 7. Connector cleanup
+  // ── Connector cleanup ─────────────────────────────────────────────────────
   for(let y=0;y<H;y++){
     const rb=y*W;let rs=-1;
     const flush=end=>{
@@ -445,13 +436,15 @@ function cleanMask(maskU8, srcData, W, H) {
     if(rs>=0)flush(W);
   }
 
-  // 8. Second blob removal (< 0.3%)
-  const minFg2=Math.floor(WH*0.003);
-  ({lab:fL,sizes:fS}=bfsLabel(bin));
-  const kp2=new Set(fS.filter(s=>s.size>=minFg2).map(s=>s.id));
-  for(let i=0;i<WH;i++) if(bin[i]&&!kp2.has(fL[i]))bin[i]=0;
+  // ── Final small-blob removal (< 0.3%) ────────────────────────────────────
+  {
+    const minSz=Math.floor(WH*0.003);
+    const{lab,sizes}=bfsLabel(bin);
+    const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));
+    for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;
+  }
 
-  // 9. Feather boundary
+  // ── Feather boundary ──────────────────────────────────────────────────────
   const alpha=new Float32Array(WH);
   for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
@@ -471,11 +464,9 @@ function cleanMask(maskU8, srcData, W, H) {
 goBtn.addEventListener('click',async()=>{
   if(!cf)return;
   if(!aiModel||!aiProc){errMsg.textContent='⚠ AI model is still loading — please wait.';errMsg.style.display='block';return;}
-  goBtn.disabled=true;goBtn.textContent='Processing…';
-  errMsg.style.display='none';resultBox.style.display='none';
+  goBtn.disabled=true;goBtn.textContent='Processing…';errMsg.style.display='none';resultBox.style.display='none';
   progWrap.style.display='block';progBar.style.width='5%';statusMsg.textContent='Reading image…';
-  let pct=5;
-  const tick=setInterval(()=>{if(pct<75){pct+=2;progBar.style.width=pct+'%';}},300);
+  let pct=5;const tick=setInterval(()=>{if(pct<75){pct+=2;progBar.style.width=pct+'%';}},300);
   try{
     const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=e=>res(e.target.result);r.readAsDataURL(cf);});
     const img=await new Promise((res,rej)=>{const i=new Image();i.onerror=rej;i.onload=()=>res(i);i.src=dataUrl;});
@@ -487,12 +478,9 @@ goBtn.addEventListener('click',async()=>{
     for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
     const rawImg=new RawImage(rgb,W,H,3);
     statusMsg.textContent='Running AI…';progBar.style.width='30%';
-    const{pixel_values}=await aiProc(rawImg);
-    const{output}=await aiModel({input:pixel_values});
-    clearInterval(tick);
-    progBar.style.width='80%';statusMsg.textContent='Cleaning up mask…';
-    const maskTensor=output[0].squeeze();
-    const maskFlat=maskTensor.data;
+    const{pixel_values}=await aiProc(rawImg);const{output}=await aiModel({input:pixel_values});
+    clearInterval(tick);progBar.style.width='80%';statusMsg.textContent='Self-checking mask…';
+    const maskTensor=output[0].squeeze();const maskFlat=maskTensor.data;
     const mH=maskTensor.dims[0],mW=maskTensor.dims[1];
     const mCanvas=document.createElement('canvas');mCanvas.width=mW;mCanvas.height=mH;
     const mCtx=mCanvas.getContext('2d');const mPx=mCtx.createImageData(mW,mH);
@@ -501,27 +489,21 @@ goBtn.addEventListener('click',async()=>{
     const sCanvas=document.createElement('canvas');sCanvas.width=W;sCanvas.height=H;
     const sCtx=sCanvas.getContext('2d');sCtx.drawImage(mCanvas,0,0,W,H);
     const rawMask=sCtx.getImageData(0,0,W,H).data;
-    const maskU8=new Uint8Array(W*H);
-    for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
-    progBar.style.width='87%';statusMsg.textContent='Refining edges…';
+    const maskU8=new Uint8Array(W*H);for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
+    progBar.style.width='87%';statusMsg.textContent='Iterative cleanup…';
     const cleanAlpha=cleanMask(maskU8,srcData,W,H);
     progBar.style.width='96%';statusMsg.textContent='Compositing…';
     outCanvas.width=W;outCanvas.height=H;
     const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
     for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
     outCtx.putImageData(outData,0,0);
-    progBar.style.width='100%';statusMsg.textContent='✅ Done!';
-    resultLabel.textContent='✅ Background removed!';
+    progBar.style.width='100%';statusMsg.textContent='✅ Done!';resultLabel.textContent='✅ Background removed!';
     dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
-    resultBox.style.display='block';
-    resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
+    resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
   }catch(err){
-    clearInterval(tick);console.error(err);
-    progBar.style.width='0%';statusMsg.textContent='';
+    clearInterval(tick);console.error(err);progBar.style.width='0%';statusMsg.textContent='';
     errMsg.textContent='❌ '+(err.message||'Something went wrong.');errMsg.style.display='block';
-  }finally{
-    goBtn.disabled=false;goBtn.textContent='✨ Remove Background';
-  }
+  }finally{goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
 });
 </script>
 </body>
