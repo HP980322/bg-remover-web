@@ -41,12 +41,6 @@
     #clearBtn{background:none;border:none;color:#555;font-size:15px;cursor:pointer;padding:4px}
     #clearBtn:hover{color:#e07070}
 
-    /* tolerance controls */
-    .ctrl-row{display:none;align-items:center;gap:10px;margin-top:.85rem}
-    .ctrl-row label{font-size:.78rem;color:#888;white-space:nowrap}
-    .ctrl-row input[type=range]{flex:1;accent-color:#7c6af7}
-    .ctrl-num{font-size:.78rem;color:#a89fff;min-width:28px;text-align:right}
-
     #goBtn{display:none;width:100%;padding:.78rem;background:#2d9e6b;color:#fff;
       border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
       margin-top:.85rem;transition:background .15s}
@@ -65,7 +59,7 @@
 
     #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
       background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem;text-align:center}
-    #resultBox p{font-size:.8rem;color:#666;margin-bottom:.75rem}
+    #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem}
     #outCanvas{max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
     #dlBtn{display:inline-block;margin-top:.85rem;padding:.58rem 1.8rem;
@@ -81,7 +75,7 @@
 
 <h1>&#127924; BG <span>Remover</span></h1>
 <p class="sub">Remove image backgrounds — free, no sign-up, runs in your browser</p>
-<span class="badge">&#10003; Free &nbsp; &#10003; No sign-up &nbsp; &#10003; Private &nbsp; &#10003; Unlimited</span>
+<span class="badge">&#10003; Free &nbsp; &#10003; No sign-up &nbsp; &#10003; Auto-detect &nbsp; &#10003; Private</span>
 
 <div class="card">
   <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp">
@@ -102,13 +96,6 @@
     <button id="clearBtn" type="button">&#10005;</button>
   </div>
 
-  <!-- Tolerance slider — shown after file selected -->
-  <div class="ctrl-row" id="ctrlRow">
-    <label for="tolSlider">Tolerance</label>
-    <input type="range" id="tolSlider" min="10" max="120" value="50" step="1">
-    <span class="ctrl-num" id="tolVal">50</span>
-  </div>
-
   <button id="goBtn" type="button">&#10024; Remove Background</button>
 
   <div id="progWrap"><div id="progBar"></div></div>
@@ -116,7 +103,7 @@
   <div id="errMsg"></div>
 
   <div class="pills">
-    <span class="pill">PNG out</span>
+    <span class="pill">Auto tolerance</span>
     <span class="pill">Soft edges</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
@@ -124,7 +111,7 @@
 </div>
 
 <div id="resultBox">
-  <p>&#9989; Done! Adjust tolerance and re-run if needed.</p>
+  <div id="resultLabel">&#9989; Background removed.</div>
   <canvas id="outCanvas"></canvas><br>
   <button id="dlBtn" type="button">&#8659; Download PNG</button>
 </div>
@@ -144,21 +131,17 @@ var fileRow   = document.getElementById('fileRow');
 var fileName  = document.getElementById('fileName');
 var fileSize  = document.getElementById('fileSize');
 var clearBtn  = document.getElementById('clearBtn');
-var ctrlRow   = document.getElementById('ctrlRow');
-var tolSlider = document.getElementById('tolSlider');
-var tolVal    = document.getElementById('tolVal');
 var goBtn     = document.getElementById('goBtn');
 var progWrap  = document.getElementById('progWrap');
 var progBar   = document.getElementById('progBar');
 var statusMsg = document.getElementById('statusMsg');
 var errMsg    = document.getElementById('errMsg');
 var resultBox = document.getElementById('resultBox');
+var resultLabel = document.getElementById('resultLabel');
 var outCanvas = document.getElementById('outCanvas');
 var dlBtn     = document.getElementById('dlBtn');
 
 var currentFile = null;
-
-tolSlider.addEventListener('input', function(){ tolVal.textContent = tolSlider.value; });
 
 pick.addEventListener('change', function(){
   if (pick.files && pick.files[0]) setFile(pick.files[0]);
@@ -170,12 +153,12 @@ dropArea.addEventListener('drop', function(e){
   var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
   if (f) setFile(f);
 });
+
 function setFile(f){
   currentFile = f;
   fileName.textContent = f.name;
   fileSize.textContent = (f.size/1048576).toFixed(2)+' MB';
   fileRow.style.display  = 'flex';
-  ctrlRow.style.display  = 'flex';
   goBtn.style.display    = 'block';
   resultBox.style.display = 'none';
   errMsg.style.display    = 'none';
@@ -183,10 +166,10 @@ function setFile(f){
   progBar.style.width     = '0%';
   progWrap.style.display  = 'none';
 }
+
 clearBtn.addEventListener('click', function(){
   currentFile = null; pick.value = '';
   fileRow.style.display   = 'none';
-  ctrlRow.style.display   = 'none';
   goBtn.style.display     = 'none';
   resultBox.style.display = 'none';
   errMsg.style.display    = 'none';
@@ -204,7 +187,7 @@ goBtn.addEventListener('click', function(){
     var img = new Image();
     img.onerror = function(){ showErr('Could not decode image.'); };
     img.onload = function(){
-      prog(15,'Image loaded…');
+      prog(12,'Decoding pixels…');
       setTimeout(function(){ processImage(img); }, 20);
     };
     img.src = ev.target.result;
@@ -212,18 +195,23 @@ goBtn.addEventListener('click', function(){
   reader.readAsDataURL(currentFile);
 });
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   IMPROVED ALGORITHM
-   1. Sample ~200 edge pixels → build a list of background colour clusters
-   2. For every pixel compute its minimum distance to any BG cluster
-   3. Flood-fill from all edges — with higher global tolerance
-   4. Soft-alpha fringe: pixels "near" the threshold get partial transparency
-   5. Morphological erosion on the alpha to kill 1-px colour fringing
-───────────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTO-TOLERANCE BACKGROUND REMOVAL
+   ───────────────────────────────────────────────────────────────────────────
+   1. Collect ALL edge pixel colours (not just corners)
+   2. Cluster them into up to 8 background colour groups using k-means
+   3. For each cluster, measure how tightly packed it is (std dev)
+   4. Auto-set tolerance = cluster radius × 1.5 (so we catch the full cluster
+      but stop at the first colour jump into the foreground)
+   5. Flood-fill from every edge pixel against its nearest cluster
+   6. Compute a soft alpha in the transition zone
+   7. Feather the alpha mask to smooth jagged edges
+   8. Final matting pass to remove colour spill from bg onto fg edges
+═══════════════════════════════════════════════════════════════════════════ */
+
 function processImage(img){
   try {
     var w = img.naturalWidth, h = img.naturalHeight;
-
     var sc = document.createElement('canvas');
     sc.width = w; sc.height = h;
     var sCtx = sc.getContext('2d');
@@ -231,156 +219,220 @@ function processImage(img){
     var id = sCtx.getImageData(0, 0, w, h);
     var px = id.data;
 
-    prog(25,'Sampling background colours…');
+    prog(20,'Sampling edge colours…');
 
-    var tol = parseInt(tolSlider.value, 10);
-
-    /* ── Step 1: collect background colour samples from all four edges ── */
-    var bgSamples = [];
-    var step = 4; // sample every 4th pixel along each edge
-    for (var x = 0; x < w; x += step) {
-      addSample(x, 0);
-      addSample(x, h - 1);
+    /* ── 1. collect all edge pixel colours ─────────────────────────────── */
+    var edgeCols = [];
+    for (var x = 0; x < w; x++) {
+      edgeCols.push(getCol(x, 0));
+      edgeCols.push(getCol(x, h-1));
     }
-    for (var y = 0; y < h; y += step) {
-      addSample(0, y);
-      addSample(w - 1, y);
-    }
-    function addSample(x, y) {
-      var i = (y * w + x) * 4;
-      bgSamples.push([px[i], px[i+1], px[i+2]]);
+    for (var y = 1; y < h-1; y++) {
+      edgeCols.push(getCol(0, y));
+      edgeCols.push(getCol(w-1, y));
     }
 
-    /* ── Step 2: distance to nearest BG sample ── */
-    function minDistToBg(pi) {
-      var r = px[pi], g = px[pi+1], b = px[pi+2];
-      var best = Infinity;
-      for (var s = 0; s < bgSamples.length; s++) {
-        var dr = r - bgSamples[s][0];
-        var dg = g - bgSamples[s][1];
-        var db = b - bgSamples[s][2];
-        var d = Math.sqrt(dr*dr + dg*dg + db*db);
-        if (d < best) best = d;
+    function getCol(x, y){
+      var i=(y*w+x)*4;
+      return [px[i], px[i+1], px[i+2]];
+    }
+
+    prog(30,'Clustering background colours…');
+
+    /* ── 2. k-means clustering of edge colours (k=8, 10 iters) ─────────── */
+    var K = Math.min(8, edgeCols.length);
+    // Initialise centroids by spreading evenly through the edge sample list
+    var centroids = [];
+    for (var ki = 0; ki < K; ki++) {
+      centroids.push(edgeCols[Math.floor(ki * edgeCols.length / K)].slice());
+    }
+
+    for (var iter = 0; iter < 10; iter++) {
+      var sums  = [];
+      var counts = [];
+      for (var ci = 0; ci < K; ci++) { sums.push([0,0,0]); counts.push(0); }
+      for (var ei = 0; ei < edgeCols.length; ei++) {
+        var c = edgeCols[ei];
+        var best = 0, bestD = colorDist3(c, centroids[0]);
+        for (var cj = 1; cj < K; cj++) {
+          var d = colorDist3(c, centroids[cj]);
+          if (d < bestD) { bestD = d; best = cj; }
+        }
+        sums[best][0] += c[0]; sums[best][1] += c[1]; sums[best][2] += c[2];
+        counts[best]++;
       }
-      return best;
+      for (var ck = 0; ck < K; ck++) {
+        if (counts[ck] > 0) {
+          centroids[ck] = [sums[ck][0]/counts[ck], sums[ck][1]/counts[ck], sums[ck][2]/counts[ck]];
+        }
+      }
     }
 
-    prog(40,'Flood-filling background…');
+    /* ── 3. compute per-cluster spread (std dev of distances to centroid) ── */
+    var clusterSpreads = new Array(K).fill(0);
+    var clusterCounts2 = new Array(K).fill(0);
+    for (var ei2 = 0; ei2 < edgeCols.length; ei2++) {
+      var c2 = edgeCols[ei2];
+      var best2 = 0, bestD2 = colorDist3(c2, centroids[0]);
+      for (var cj2 = 1; cj2 < K; cj2++) {
+        var d2 = colorDist3(c2, centroids[cj2]);
+        if (d2 < bestD2) { bestD2 = d2; best2 = cj2; }
+      }
+      clusterSpreads[best2] += bestD2 * bestD2;
+      clusterCounts2[best2]++;
+    }
+    // Per-cluster tolerance = sqrt(variance) * 2.2 — captures 2+ std devs
+    var clusterTols = centroids.map(function(_, ci){
+      if (clusterCounts2[ci] === 0) return 20;
+      var stddev = Math.sqrt(clusterSpreads[ci] / clusterCounts2[ci]);
+      return Math.max(18, Math.min(90, stddev * 2.2));
+    });
 
-    /* ── Step 3: BFS flood-fill from all edge pixels within tolerance ── */
-    var alpha = new Float32Array(w * h); // 0=bg, 1=fg, starts at 1
-    for (var i = 0; i < alpha.length; i++) alpha[i] = 1;
+    prog(42,'Flood-filling background…');
 
+    /* ── 4. per-pixel: distance to nearest cluster centroid ─────────────── */
+    function nearestCluster(pi){
+      var r = px[pi], g = px[pi+1], b = px[pi+2];
+      var bestIdx = 0, bestD = Infinity;
+      for (var ci = 0; ci < K; ci++) {
+        var dr=r-centroids[ci][0], dg=g-centroids[ci][1], db=b-centroids[ci][2];
+        var d = Math.sqrt(dr*dr+dg*dg+db*db);
+        if (d < bestD) { bestD = d; bestIdx = ci; }
+      }
+      return { idx: bestIdx, dist: bestD };
+    }
+
+    function isBgPixel(pi, tol){
+      var nc = nearestCluster(pi);
+      return nc.dist <= (tol !== undefined ? tol : clusterTols[nc.idx]);
+    }
+
+    /* ── 5. BFS flood-fill from all edges ───────────────────────────────── */
+    var alpha   = new Float32Array(w * h);
     var visited = new Uint8Array(w * h);
     var queue   = [];
+    for (var fi = 0; fi < w * h; fi++) alpha[fi] = 1; // default: foreground
 
-    function seedEdge(x, y) {
-      var idx = y * w + x;
-      if (!visited[idx] && minDistToBg(idx * 4) <= tol) {
-        visited[idx] = 1;
-        alpha[idx]   = 0;
-        queue.push(idx);
+    function seedEdge(x, y){
+      var idx = y*w+x;
+      if (!visited[idx] && isBgPixel(idx*4)) {
+        visited[idx]=1; alpha[idx]=0; queue.push(idx);
       }
     }
-    for (var ex = 0; ex < w; ex++) { seedEdge(ex, 0); seedEdge(ex, h-1); }
-    for (var ey = 1; ey < h-1; ey++) { seedEdge(0, ey); seedEdge(w-1, ey); }
+    for (var ex=0;ex<w;ex++){ seedEdge(ex,0); seedEdge(ex,h-1); }
+    for (var ey=1;ey<h-1;ey++){ seedEdge(0,ey); seedEdge(w-1,ey); }
 
-    var dirs = [-1, 1, -w, w];
-    var qi = 0;
+    var dirs=[-1,1,-w,w];
+    var qi=0;
     while (qi < queue.length) {
       var cur = queue[qi++];
-      for (var d = 0; d < 4; d++) {
-        var nb = cur + dirs[d];
-        if (nb < 0 || nb >= w * h) continue;
-        if (dirs[d] === -1 && cur % w === 0) continue;
-        if (dirs[d] ===  1 && nb  % w === 0) continue;
-        if (!visited[nb] && minDistToBg(nb * 4) <= tol) {
-          visited[nb] = 1;
-          alpha[nb]   = 0;
-          queue.push(nb);
+      for (var d=0;d<4;d++){
+        var nb=cur+dirs[d];
+        if (nb<0||nb>=w*h) continue;
+        if (dirs[d]===-1&&cur%w===0) continue;
+        if (dirs[d]===1&&nb%w===0) continue;
+        if (!visited[nb]&&isBgPixel(nb*4)){
+          visited[nb]=1; alpha[nb]=0; queue.push(nb);
         }
       }
     }
 
-    prog(60,'Softening edges…');
+    prog(60,'Computing soft edges…');
 
-    /* ── Step 4: soft-alpha transition zone (tol-10 → tol+10) ── */
-    var softRange = Math.max(10, tol * 0.2);
-    for (var p = 0; p < w * h; p++) {
-      if (alpha[p] === 1) { // not already marked as bg
-        var dist = minDistToBg(p * 4);
-        if (dist < tol - softRange) {
-          // well inside bg threshold — transparent
-          alpha[p] = 0;
-        } else if (dist < tol + softRange) {
-          // transition zone — partial transparency based on distance
-          alpha[p] = (dist - (tol - softRange)) / (softRange * 2);
+    /* ── 6. soft alpha in transition zone ───────────────────────────────── */
+    for (var sp=0; sp<w*h; sp++){
+      if (alpha[sp]===1){ // still marked as fg — check distance
+        var nc2=nearestCluster(sp*4);
+        var tol2=clusterTols[nc2.idx];
+        var soft=tol2*0.3; // transition band = 30% of tolerance
+        if (nc2.dist < tol2-soft){
+          alpha[sp]=0; // well inside bg
+        } else if (nc2.dist < tol2+soft){
+          // smooth ramp: 0 at inner edge → 1 at outer edge
+          alpha[sp]=(nc2.dist-(tol2-soft))/(soft*2);
         }
-        // else: well inside fg — stays 1
       }
     }
 
-    prog(75,'Cleaning edges…');
+    prog(72,'Feathering edges…');
 
-    /* ── Step 5: feather — blur alpha slightly to avoid hard jagged edges ── */
-    var aOut = new Float32Array(alpha);
-    for (var fy = 1; fy < h-1; fy++) {
-      for (var fx = 1; fx < w-1; fx++) {
-        var fi = fy * w + fx;
-        // 3x3 box blur of alpha
-        var sum = 0;
-        sum += alpha[(fy-1)*w+(fx-1)] + alpha[(fy-1)*w+fx] + alpha[(fy-1)*w+(fx+1)];
-        sum += alpha[fy*w+(fx-1)]     + alpha[fi]           + alpha[fy*w+(fx+1)];
-        sum += alpha[(fy+1)*w+(fx-1)] + alpha[(fy+1)*w+fx] + alpha[(fy+1)*w+(fx+1)];
-        aOut[fi] = sum / 9;
+    /* ── 7. 3×3 box-blur the alpha mask to smooth jagged edges ─────────── */
+    var aBlur = new Float32Array(alpha);
+    for (var fy=1;fy<h-1;fy++){
+      for (var fx=1;fx<w-1;fx++){
+        var fi2=fy*w+fx;
+        var sum=0;
+        for (var dy=-1;dy<=1;dy++){
+          for (var dx=-1;dx<=1;dx++) sum+=alpha[(fy+dy)*w+(fx+dx)];
+        }
+        aBlur[fi2]=sum/9;
       }
     }
 
-    prog(88,'Compositing…');
+    prog(82,'Removing colour spill…');
 
-    /* ── Step 6: write output ── */
-    var oc = document.createElement('canvas');
-    oc.width = w; oc.height = h;
-    var octx = oc.getContext('2d');
-    var outId = octx.createImageData(w, h);
-    var od = outId.data;
-    for (var op = 0; op < w * h; op++) {
-      var opi = op * 4;
-      od[opi]   = px[opi];
-      od[opi+1] = px[opi+1];
-      od[opi+2] = px[opi+2];
-      od[opi+3] = Math.round(aOut[op] * 255);
+    /* ── 8. colour-spill matting pass ──────────────────────────────────────
+       Pixels at the edge of the fg often have bg colour mixed in.
+       We detect semi-transparent pixels (0.05 < alpha < 0.9) whose colour is
+       close to a bg cluster and push their alpha down further.               */
+    for (var mp=0; mp<w*h; mp++){
+      var a=aBlur[mp];
+      if (a>0.05 && a<0.95){
+        var nc3=nearestCluster(mp*4);
+        var spillFactor=1-Math.min(1, nc3.dist/(clusterTols[nc3.idx]*1.5));
+        aBlur[mp]=Math.max(0, a-spillFactor*0.4);
+      }
     }
-    octx.putImageData(outId, 0, 0);
+
+    prog(90,'Compositing…');
+
+    /* ── 9. write final RGBA output ─────────────────────────────────────── */
+    var oc=document.createElement('canvas');
+    oc.width=w; oc.height=h;
+    var octx=oc.getContext('2d');
+    var outId=octx.createImageData(w,h);
+    var od=outId.data;
+    for (var op=0;op<w*h;op++){
+      var opi=op*4;
+      od[opi]=px[opi]; od[opi+1]=px[opi+1]; od[opi+2]=px[opi+2];
+      od[opi+3]=Math.min(255,Math.round(aBlur[op]*255));
+    }
+    octx.putImageData(outId,0,0);
 
     prog(100,'✅ Done!');
 
-    outCanvas.width = w; outCanvas.height = h;
-    var rctx = outCanvas.getContext('2d');
-    rctx.clearRect(0, 0, w, h);
-    rctx.drawImage(oc, 0, 0);
+    outCanvas.width=w; outCanvas.height=h;
+    var rctx=outCanvas.getContext('2d');
+    rctx.clearRect(0,0,w,h);
+    rctx.drawImage(oc,0,0);
 
-    dlBtn.onclick = function(){
-      var a = document.createElement('a');
-      a.download = (currentFile.name.replace(/\.[^.]+$/,'') || 'image') + '_nobg.png';
-      a.href = outCanvas.toDataURL('image/png');
+    resultLabel.textContent = '✅ Background removed automatically.';
+
+    dlBtn.onclick=function(){
+      var a=document.createElement('a');
+      a.download=(currentFile.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';
+      a.href=outCanvas.toDataURL('image/png');
       a.click();
     };
 
-    resultBox.style.display = 'block';
-    resultBox.scrollIntoView({ behavior:'smooth', block:'nearest' });
+    resultBox.style.display='block';
+    resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
 
-  } catch(err) {
-    showErr(err.message || 'Something went wrong.');
+  } catch(err){
+    showErr(err.message||'Something went wrong.');
   } finally {
-    goBtn.disabled = false; goBtn.textContent = '✨ Remove Background';
+    goBtn.disabled=false; goBtn.textContent='✨ Remove Background';
   }
 }
 
-function prog(pct, msg){ progBar.style.width = pct+'%'; statusMsg.textContent = msg; }
+function colorDist3(a,b){
+  var dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2];
+  return Math.sqrt(dr*dr+dg*dg+db*db);
+}
+function prog(pct,msg){ progBar.style.width=pct+'%'; statusMsg.textContent=msg; }
 function showErr(msg){
-  prog(0,''); errMsg.textContent = '❌ ' + msg; errMsg.style.display = 'block';
-  goBtn.disabled = false; goBtn.textContent = '✨ Remove Background';
+  prog(0,''); errMsg.textContent='❌ '+msg; errMsg.style.display='block';
+  goBtn.disabled=false; goBtn.textContent='✨ Remove Background';
 }
 
 })();
