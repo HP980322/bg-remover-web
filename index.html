@@ -177,30 +177,30 @@ function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.siz
 clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
 
 // ══════════════════════════════════════════════════════════════════════════════
-// cleanMask — v15
+// cleanMask — v16
 //
-// Fixes a critical bug found by tracing the pipeline step-by-step in Python:
+// New fix discovered by comparing with the original image in Python:
 //
-// ROOT CAUSE of persistent sky spots:
-//   Morphological closing (step C) bridges gaps between fg hair strands.
-//   Those gaps contain sky-coloured pixels, so closing FILLS them with sky colour
-//   back into the mask. Step A then removes them in the next iteration, then
-//   closing adds them again — the loop oscillates and never converges to 0.
+// The "dirty spots on cloth" in the screenshot were sky-coloured transparent holes
+// INSIDE the character body that showed as dark patches. The v15 removeSky() was
+// removing these correctly from the mask edge, but some sky components are
+// ENCLOSED by fg pixels — they're holes inside the body, not edge artifacts.
 //
-// FIX: Run sky removal (removeSky) after EVERY sub-step that can add pixels:
-//   after closing (C) and after body dilation (D), not just at the start of A.
-//   This prevents sky pixels from surviving even one sub-step.
+// FIX in removeSky(): Before removing a sky component, check if it touches
+// any transparent (bg) pixel from the current mask:
+//   • If yes → it's at the mask edge → REMOVE (sky leaking in from outside)
+//   • If no → it's enclosed by fg → FILL it (it's a hole inside the body)
 //
-// The loop now converges in one pass: sky=1359 → 0, holes=0. Score=0. Done.
+// This means sky-coloured areas inside the shirt/cloth stay filled (body stays solid),
+// while sky fragments at the hair/edge boundary are correctly removed.
 //
-// Also from v14:
-//   • O(n) BFS border check (border flag set during traversal, not after)
-//   • Warm ratio body test (R > G×1.2, R > B×1.2) catches dark maroon sleeve
+// Also: hole-fill now uses bf < 0.70 threshold (was 0.40) to fill more enclosed
+// pockets regardless of colour — catches light bg-coloured holes inside body.
 // ══════════════════════════════════════════════════════════════════════════════
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
 
-  // BFS labeller with O(n) border detection
+  // BFS labeller with O(n) border detection + optional pixel tracking
   function bfsLabel(arr, trackPx){
     const lab=new Int32Array(WH), sizes=[], pixMap=trackPx?new Map():null;
     let nL=0;
@@ -246,61 +246,102 @@ function cleanMask(maskU8, srcData, W, H) {
   for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
   const isBg=p=>nd[p]<=tp[p];
 
-  // Strongly sky = bg-coloured AND blue-biased AND unsaturated
+  // Strongly sky = bg-coloured AND blue-biased (B-R>15) AND unsaturated (sat<20)
   function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
 
-  // Body colour = warm-ratio (catches dark sleeve) OR pink OR bright skin
+  // Body colour = warm-ratio OR pink OR bright skin, NOT bg-coloured
   function isBody(p){
     const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
     const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
     return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
   }
 
-  // removeSky: removes (fg & strongly-sky) components <1500px not on border
-  function removeSky(b){
-    const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+  // Smart sky handler: for each sky-in-fg component < 1500px, not on image border:
+  //   • If it touches a transparent (bg) pixel → it's at the mask edge → REMOVE
+  //   • If fully enclosed by fg → it's a hole inside the body → FILL
+  function handleSky(b){
+    const sk=new Uint8Array(WH);
+    for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
     const{lab,sizes,pixMap}=bfsLabel(sk,true);
-    for(const{size,onBorder,id}of sizes)if(!onBorder&&size<1500)for(const i of pixMap.get(id))b[i]=0;
+    for(const{id,size,onBorder}of sizes){
+      if(onBorder||size>=1500)continue;
+      const px=pixMap.get(id);
+      // Check if any 4-neighbour of this component is transparent (not in mask)
+      let touchesBg=false;
+      outer: for(const p of px){
+        for(let d=0;d<4;d++){
+          const nb=p+DIRS[d];
+          if(nb<0||nb>=WH)continue;
+          if(DIRS[d]===-1&&p%W===0)continue;
+          if(DIRS[d]===1&&nb%W===0)continue;
+          if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}// neighbour is bg, not sky
+        }
+      }
+      if(touchesBg){
+        // At mask edge → remove (sky leaking in from outside)
+        for(const i of px)b[i]=0;
+      } else {
+        // Enclosed by fg → fill (sky-coloured hole inside body)
+        for(const i of px)b[i]=1;
+      }
+    }
   }
 
   // Threshold
   const bin=new Uint8Array(WH);
   for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
 
-  // Initial blob removal (< 0.5%)
+  // Initial small fg blob removal (< 0.5%)
   {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
 
-  // Measure score: sky_px + holes_px×2
+  // Measure score: sky_edge_px + body_holes_px×2
   function score(b){
     const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
-    let s=0;const{sizes}=bfsLabel(sk,false);for(const{size,onBorder}of sizes)if(!onBorder&&size<1500)s+=size;
+    const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);
+    let s=0;
+    for(const{id,size,onBorder}of ss){
+      if(onBorder||size>=1500)continue;
+      const px=sp.get(id);
+      let touchesBg=false;
+      outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
+      if(touchesBg)s+=size;
+    }
     const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
     const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
     const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-    for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.40||(size<500&&bf<0.65))s+=size*2;}
+    for(const{id,size,onBorder}of bgS){
+      if(onBorder||!size)continue;
+      const px=bgP.get(id);
+      const bf=px.filter(isBg).length/size;
+      if(bf<0.70)s+=size*2;  // fill enclosed holes that aren't strongly bg-coloured
+    }
     return s;
   }
 
-  // Iterative loop — sky removal runs after EACH step that can add pixels
+  // Iterative loop
   let prev=Infinity;
   for(let iter=0;iter<8;iter++){
     const sc=score(bin);
     if(sc===0||sc>=prev)break;
     prev=sc;
 
-    // A: sky removal
-    removeSky(bin);
+    // A: smart sky handling (remove edge-sky, fill enclosed-sky)
+    handleSky(bin);
 
-    // B: fill enclosed body-coloured bg holes
+    // B: fill enclosed bg holes (bf < 0.70 = not overwhelmingly bg-coloured)
     {
       const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
       const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
       const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-      for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.40||(size<500&&bf<0.65))for(const i of px)bin[i]=1;}
+      for(const{id,size,onBorder}of bgS){
+        if(onBorder||!size)continue;
+        const px=bgP.get(id);
+        const bf=px.filter(isBg).length/size;
+        if(bf<0.70)for(const i of px)bin[i]=1;
+      }
     }
 
-    // C: morphological closing × 2, then immediately re-remove sky
-    // (closing bridges gaps in hair that happen to be sky-coloured)
+    // C: morphological closing × 2, then re-handle sky
     for(let pass=0;pass<2;pass++){
       const dil=new Uint8Array(bin);
       for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
@@ -308,9 +349,9 @@ function cleanMask(maskU8, srcData, W, H) {
       for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}
       for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
-    removeSky(bin); // ← KEY FIX: remove sky re-introduced by closing
+    handleSky(bin);
 
-    // D: body-colour dilation × 3, then re-remove sky
+    // D: body-colour dilation × 3, then re-handle sky
     for(let pass=0;pass<3;pass++){
       const prev2=new Uint8Array(bin);
       for(let p=0;p<WH;p++){
@@ -319,7 +360,7 @@ function cleanMask(maskU8, srcData, W, H) {
         if(hasFg&&isBody(p))bin[p]=1;
       }
     }
-    removeSky(bin); // safety: remove any sky the dilation may have added
+    handleSky(bin);
   }
 
   // Connector cleanup
@@ -340,7 +381,7 @@ function cleanMask(maskU8, srcData, W, H) {
   // Final blob removal (< 0.3%)
   {const minSz=Math.floor(WH*0.003);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
 
-  // Feather
+  // Feather boundary
   const alpha=new Float32Array(WH);for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
   for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const ci=y*W+x;bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;}
