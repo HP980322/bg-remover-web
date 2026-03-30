@@ -15,7 +15,6 @@
       padding:.22rem .85rem;font-size:.73rem;color:#a89fff;margin-bottom:2rem}
     .card{width:100%;max-width:560px;background:#15151e;border:1px solid #2a2a3a;
       border-radius:18px;padding:1.75rem}
-
     .upload-area{display:block;border:2px dashed #333;border-radius:12px;padding:2.5rem 1rem;
       text-align:center;cursor:pointer;transition:border-color .15s,background .15s;
       background:#0d0d12;user-select:none}
@@ -24,7 +23,6 @@
     .upload-area strong{display:block;font-size:.92rem;color:#d0d0e0;margin-bottom:.25rem}
     .upload-area small{font-size:.76rem;color:#666}
     #pick{position:absolute;left:-9999px;opacity:0}
-
     .or{display:flex;align-items:center;gap:8px;margin:.9rem 0}
     .or hr{flex:1;border:none;border-top:1px solid #222}
     .or span{font-size:.72rem;color:#444}
@@ -32,31 +30,25 @@
       border:1px solid #2a2a3a;border-radius:10px;font-size:.88rem;cursor:pointer;
       text-align:center;transition:background .15s,border-color .15s;user-select:none}
     .btn-pick:hover{background:#22223a;border-color:#7c6af7;color:#fff}
-
     #fileRow{display:none;align-items:center;gap:10px;background:#1c1c28;
       border:1px solid #2a2a3a;border-radius:10px;padding:.6rem 1rem;margin-top:.85rem}
-    #fileRow .name{flex:1;font-size:.82rem;color:#d0d0e0;overflow:hidden;
-      text-overflow:ellipsis;white-space:nowrap}
+    #fileRow .name{flex:1;font-size:.82rem;color:#d0d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #fileRow .size{font-size:.72rem;color:#666;flex-shrink:0}
     #clearBtn{background:none;border:none;color:#555;font-size:15px;cursor:pointer;padding:4px}
     #clearBtn:hover{color:#e07070}
-
     #goBtn{display:none;width:100%;padding:.78rem;background:#2d9e6b;color:#fff;
       border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
       margin-top:.85rem;transition:background .15s}
     #goBtn:hover{background:#1f7a50}
     #goBtn:disabled{background:#1a5a3e;color:#556;cursor:not-allowed}
-
     #progWrap{display:none;background:#0d0d12;border-radius:6px;height:7px;overflow:hidden;margin-top:.85rem}
     #progBar{height:100%;width:0%;background:#7c6af7;transition:width .3s}
     #statusMsg{margin-top:.65rem;font-size:.8rem;color:#9d8fff;text-align:center;min-height:1.1rem}
     #errMsg{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;
       padding:.7rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.6}
-
     .pills{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.1rem}
     .pill{font-size:.67rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;
       color:#444;background:#0d0d14}
-
     #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
       background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem;text-align:center}
     #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem}
@@ -66,7 +58,6 @@
       background:#2d9e6b;color:#fff;border:none;border-radius:8px;
       font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s}
     #dlBtn:hover{background:#1f7a50}
-
     footer{margin-top:2.5rem;font-size:.72rem;color:#444;text-align:center;line-height:1.8}
     footer a{color:#444}
   </style>
@@ -79,31 +70,25 @@
 
 <div class="card">
   <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp">
-
   <label class="upload-area" for="pick" id="dropArea">
     <span class="icon">&#128247;</span>
     <strong>Drop image here or click to browse</strong>
-    <small>PNG &bull; JPG &bull; WEBP &bull; BMP</small>
+    <small>PNG &bull; JPG &bull; WEBP &bull; BMP &bull; Works best on solid/plain backgrounds</small>
   </label>
-
   <div class="or"><hr><span>or</span><hr></div>
   <label class="btn-pick" for="pick">&#128193; Choose image file</label>
-
   <div id="fileRow">
     <span style="font-size:18px">&#128444;</span>
     <span class="name" id="fileName"></span>
     <span class="size" id="fileSize"></span>
     <button id="clearBtn" type="button">&#10005;</button>
   </div>
-
   <button id="goBtn" type="button">&#10024; Remove Background</button>
-
   <div id="progWrap"><div id="progBar"></div></div>
   <p id="statusMsg"></p>
   <div id="errMsg"></div>
-
   <div class="pills">
-    <span class="pill">Auto tolerance</span>
+    <span class="pill">K-means auto</span>
     <span class="pill">Soft edges</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
@@ -111,7 +96,7 @@
 </div>
 
 <div id="resultBox">
-  <div id="resultLabel">&#9989; Background removed.</div>
+  <div id="resultLabel">&#9989; Done!</div>
   <canvas id="outCanvas"></canvas><br>
   <button id="dlBtn" type="button">&#8659; Download PNG</button>
 </div>
@@ -125,315 +110,235 @@
 (function(){
 'use strict';
 
-var pick      = document.getElementById('pick');
-var dropArea  = document.getElementById('dropArea');
-var fileRow   = document.getElementById('fileRow');
-var fileName  = document.getElementById('fileName');
-var fileSize  = document.getElementById('fileSize');
-var clearBtn  = document.getElementById('clearBtn');
-var goBtn     = document.getElementById('goBtn');
-var progWrap  = document.getElementById('progWrap');
-var progBar   = document.getElementById('progBar');
-var statusMsg = document.getElementById('statusMsg');
-var errMsg    = document.getElementById('errMsg');
-var resultBox = document.getElementById('resultBox');
-var resultLabel = document.getElementById('resultLabel');
-var outCanvas = document.getElementById('outCanvas');
-var dlBtn     = document.getElementById('dlBtn');
+/* ─────────────────────────────────────────────────────────────────────────────
+   BG Remover v6 — Frozen best algorithm
+   Pipeline:
+     1. K-means (k=12) on all edge pixels to model the background palette
+     2. Per-cluster adaptive tolerance (mean_dist + 2.5*std + 12, clamped 22-62)
+     3. BFS flood-fill from every border pixel
+     4. Connected-component analysis: keep the largest fg blob + any other blobs
+        that are > 1% of the largest (to preserve detached limbs)
+     5. Soft alpha transition zone at boundaries
+     6. 3x3 box-blur feathering on the alpha channel
+─────────────────────────────────────────────────────────────────────────────*/
 
-var currentFile = null;
+var pick=document.getElementById('pick'), dropArea=document.getElementById('dropArea'),
+    fileRow=document.getElementById('fileRow'), fileName=document.getElementById('fileName'),
+    fileSize=document.getElementById('fileSize'), clearBtn=document.getElementById('clearBtn'),
+    goBtn=document.getElementById('goBtn'), progWrap=document.getElementById('progWrap'),
+    progBar=document.getElementById('progBar'), statusMsg=document.getElementById('statusMsg'),
+    errMsg=document.getElementById('errMsg'), resultBox=document.getElementById('resultBox'),
+    resultLabel=document.getElementById('resultLabel'), outCanvas=document.getElementById('outCanvas'),
+    dlBtn=document.getElementById('dlBtn');
 
-pick.addEventListener('change', function(){
-  if (pick.files && pick.files[0]) setFile(pick.files[0]);
+var cf=null;
+
+pick.addEventListener('change',function(){ if(pick.files&&pick.files[0]) setFile(pick.files[0]); });
+dropArea.addEventListener('dragover',function(e){e.preventDefault();dropArea.classList.add('over');});
+dropArea.addEventListener('dragleave',function(){dropArea.classList.remove('over');});
+dropArea.addEventListener('drop',function(e){
+  e.preventDefault();dropArea.classList.remove('over');
+  var f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];if(f)setFile(f);
 });
-dropArea.addEventListener('dragover', function(e){ e.preventDefault(); dropArea.classList.add('over'); });
-dropArea.addEventListener('dragleave', function(){ dropArea.classList.remove('over'); });
-dropArea.addEventListener('drop', function(e){
-  e.preventDefault(); dropArea.classList.remove('over');
-  var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) setFile(f);
-});
-
 function setFile(f){
-  currentFile = f;
-  fileName.textContent = f.name;
-  fileSize.textContent = (f.size/1048576).toFixed(2)+' MB';
-  fileRow.style.display  = 'flex';
-  goBtn.style.display    = 'block';
-  resultBox.style.display = 'none';
-  errMsg.style.display    = 'none';
-  statusMsg.textContent   = '';
-  progBar.style.width     = '0%';
-  progWrap.style.display  = 'none';
+  cf=f; fileName.textContent=f.name; fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
+  fileRow.style.display='flex'; goBtn.style.display='block';
+  resultBox.style.display='none'; errMsg.style.display='none';
+  statusMsg.textContent=''; progBar.style.width='0%'; progWrap.style.display='none';
 }
-
-clearBtn.addEventListener('click', function(){
-  currentFile = null; pick.value = '';
-  fileRow.style.display   = 'none';
-  goBtn.style.display     = 'none';
-  resultBox.style.display = 'none';
-  errMsg.style.display    = 'none';
-  statusMsg.textContent   = '';
+clearBtn.addEventListener('click',function(){
+  cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';
+  resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';
 });
 
-goBtn.addEventListener('click', function(){
-  if (!currentFile) return;
-  goBtn.disabled = true; goBtn.textContent = 'Processing…';
-  errMsg.style.display = 'none'; resultBox.style.display = 'none';
-  progWrap.style.display = 'block'; prog(5,'Reading image…');
-  var reader = new FileReader();
-  reader.onerror = function(){ showErr('Could not read file.'); };
-  reader.onload = function(ev){
-    var img = new Image();
-    img.onerror = function(){ showErr('Could not decode image.'); };
-    img.onload = function(){
-      prog(12,'Decoding pixels…');
-      setTimeout(function(){ processImage(img); }, 20);
-    };
-    img.src = ev.target.result;
+goBtn.addEventListener('click',function(){
+  if(!cf)return;
+  goBtn.disabled=true;goBtn.textContent='Processing…';
+  errMsg.style.display='none';resultBox.style.display='none';
+  progWrap.style.display='block';prog(5,'Reading image…');
+  var r=new FileReader();
+  r.onerror=function(){showErr('Could not read file.');};
+  r.onload=function(ev){
+    var img=new Image();
+    img.onerror=function(){showErr('Could not decode image.');};
+    img.onload=function(){prog(12,'Image loaded…');setTimeout(function(){run(img);},20);};
+    img.src=ev.target.result;
   };
-  reader.readAsDataURL(currentFile);
+  r.readAsDataURL(cf);
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   AUTO-TOLERANCE BACKGROUND REMOVAL
-   ───────────────────────────────────────────────────────────────────────────
-   1. Collect ALL edge pixel colours (not just corners)
-   2. Cluster them into up to 8 background colour groups using k-means
-   3. For each cluster, measure how tightly packed it is (std dev)
-   4. Auto-set tolerance = cluster radius × 1.5 (so we catch the full cluster
-      but stop at the first colour jump into the foreground)
-   5. Flood-fill from every edge pixel against its nearest cluster
-   6. Compute a soft alpha in the transition zone
-   7. Feather the alpha mask to smooth jagged edges
-   8. Final matting pass to remove colour spill from bg onto fg edges
-═══════════════════════════════════════════════════════════════════════════ */
-
-function processImage(img){
-  try {
-    var w = img.naturalWidth, h = img.naturalHeight;
-    var sc = document.createElement('canvas');
-    sc.width = w; sc.height = h;
-    var sCtx = sc.getContext('2d');
-    sCtx.drawImage(img, 0, 0);
-    var id = sCtx.getImageData(0, 0, w, h);
-    var px = id.data;
+function run(img){
+  try{
+    var w=img.naturalWidth,h=img.naturalHeight;
+    var sc=document.createElement('canvas');sc.width=w;sc.height=h;
+    var ctx=sc.getContext('2d');ctx.drawImage(img,0,0);
+    var id=ctx.getImageData(0,0,w,h),px=id.data;
 
     prog(20,'Sampling edge colours…');
 
-    /* ── 1. collect all edge pixel colours ─────────────────────────────── */
-    var edgeCols = [];
-    for (var x = 0; x < w; x++) {
-      edgeCols.push(getCol(x, 0));
-      edgeCols.push(getCol(x, h-1));
-    }
-    for (var y = 1; y < h-1; y++) {
-      edgeCols.push(getCol(0, y));
-      edgeCols.push(getCol(w-1, y));
-    }
+    /* ── 1. Edge pixel collection (sample every 2nd pixel for speed) ── */
+    var ec=[];
+    for(var x=0;x<w;x+=2){ec.push(gc(x,0));ec.push(gc(x,h-1));}
+    for(var y=1;y<h-1;y+=2){ec.push(gc(0,y));ec.push(gc(w-1,y));}
+    function gc(x,y){var i=(y*w+x)*4;return[px[i],px[i+1],px[i+2]];}
 
-    function getCol(x, y){
-      var i=(y*w+x)*4;
-      return [px[i], px[i+1], px[i+2]];
-    }
+    prog(28,'Building colour model…');
 
-    prog(30,'Clustering background colours…');
-
-    /* ── 2. k-means clustering of edge colours (k=8, 10 iters) ─────────── */
-    var K = Math.min(8, edgeCols.length);
-    // Initialise centroids by spreading evenly through the edge sample list
-    var centroids = [];
-    for (var ki = 0; ki < K; ki++) {
-      centroids.push(edgeCols[Math.floor(ki * edgeCols.length / K)].slice());
-    }
-
-    for (var iter = 0; iter < 10; iter++) {
-      var sums  = [];
-      var counts = [];
-      for (var ci = 0; ci < K; ci++) { sums.push([0,0,0]); counts.push(0); }
-      for (var ei = 0; ei < edgeCols.length; ei++) {
-        var c = edgeCols[ei];
-        var best = 0, bestD = colorDist3(c, centroids[0]);
-        for (var cj = 1; cj < K; cj++) {
-          var d = colorDist3(c, centroids[cj]);
-          if (d < bestD) { bestD = d; best = cj; }
-        }
-        sums[best][0] += c[0]; sums[best][1] += c[1]; sums[best][2] += c[2];
-        counts[best]++;
+    /* ── 2. K-means k=12, 20 iterations ── */
+    var K=12,N=ec.length;
+    var cents=[];
+    for(var ki=0;ki<K;ki++) cents.push(ec[Math.floor(ki*N/K)].slice());
+    for(var it=0;it<20;it++){
+      var sums=[],cnts=[];
+      for(var ci=0;ci<K;ci++){sums.push([0,0,0]);cnts.push(0);}
+      for(var ei=0;ei<N;ei++){
+        var c=ec[ei],bk=0,bd=cd3(c,cents[0]);
+        for(var cj=1;cj<K;cj++){var dd=cd3(c,cents[cj]);if(dd<bd){bd=dd;bk=cj;}}
+        sums[bk][0]+=c[0];sums[bk][1]+=c[1];sums[bk][2]+=c[2];cnts[bk]++;
       }
-      for (var ck = 0; ck < K; ck++) {
-        if (counts[ck] > 0) {
-          centroids[ck] = [sums[ck][0]/counts[ck], sums[ck][1]/counts[ck], sums[ck][2]/counts[ck]];
-        }
-      }
+      for(var ck=0;ck<K;ck++) if(cnts[ck]>0) cents[ck]=[sums[ck][0]/cnts[ck],sums[ck][1]/cnts[ck],sums[ck][2]/cnts[ck]];
     }
 
-    /* ── 3. compute per-cluster spread (std dev of distances to centroid) ── */
-    var clusterSpreads = new Array(K).fill(0);
-    var clusterCounts2 = new Array(K).fill(0);
-    for (var ei2 = 0; ei2 < edgeCols.length; ei2++) {
-      var c2 = edgeCols[ei2];
-      var best2 = 0, bestD2 = colorDist3(c2, centroids[0]);
-      for (var cj2 = 1; cj2 < K; cj2++) {
-        var d2 = colorDist3(c2, centroids[cj2]);
-        if (d2 < bestD2) { bestD2 = d2; best2 = cj2; }
-      }
-      clusterSpreads[best2] += bestD2 * bestD2;
-      clusterCounts2[best2]++;
+    /* ── 3. Per-cluster adaptive tolerance ── */
+    var cDists=[],cCnts=new Array(K).fill(0);
+    for(var i2=0;i2<K;i2++) cDists.push([]);
+    for(var ei3=0;ei3<N;ei3++){
+      var c3=ec[ei3],bk3=0,bd3=cd3(c3,cents[0]);
+      for(var cj3=1;cj3<K;cj3++){var dd3=cd3(c3,cents[cj3]);if(dd3<bd3){bd3=dd3;bk3=cj3;}}
+      cDists[bk3].push(bd3);cCnts[bk3]++;
     }
-    // Per-cluster tolerance = sqrt(variance) * 2.2 — captures 2+ std devs
-    var clusterTols = centroids.map(function(_, ci){
-      if (clusterCounts2[ci] === 0) return 20;
-      var stddev = Math.sqrt(clusterSpreads[ci] / clusterCounts2[ci]);
-      return Math.max(18, Math.min(90, stddev * 2.2));
+    var tols=cents.map(function(_,ci){
+      var arr=cDists[ci];if(!arr.length)return 26;
+      var mean=arr.reduce(function(s,v){return s+v;},0)/arr.length;
+      var variance=arr.reduce(function(s,v){return s+(v-mean)*(v-mean);},0)/arr.length;
+      var std=Math.sqrt(variance);
+      return Math.max(22,Math.min(62,mean+2.5*std+12));
     });
 
-    prog(42,'Flood-filling background…');
+    prog(40,'Flood-filling background…');
 
-    /* ── 4. per-pixel: distance to nearest cluster centroid ─────────────── */
-    function nearestCluster(pi){
-      var r = px[pi], g = px[pi+1], b = px[pi+2];
-      var bestIdx = 0, bestD = Infinity;
-      for (var ci = 0; ci < K; ci++) {
-        var dr=r-centroids[ci][0], dg=g-centroids[ci][1], db=b-centroids[ci][2];
-        var d = Math.sqrt(dr*dr+dg*dg+db*db);
-        if (d < bestD) { bestD = d; bestIdx = ci; }
+    /* ── 4. Per-pixel: distance to nearest centroid ── */
+    var WH=w*h;
+    var nd=new Float32Array(WH),tp=new Float32Array(WH),ni=new Uint8Array(WH);
+    for(var p=0;p<WH;p++){
+      var pi=p*4,r=px[pi],g=px[pi+1],b=px[pi+2];
+      var bst=0,bstd=Infinity;
+      for(var ci4=0;ci4<K;ci4++){
+        var dr=r-cents[ci4][0],dg=g-cents[ci4][1],db=b-cents[ci4][2];
+        var dd4=Math.sqrt(dr*dr+dg*dg+db*db);
+        if(dd4<bstd){bstd=dd4;bst=ci4;}
       }
-      return { idx: bestIdx, dist: bestD };
+      nd[p]=bstd;ni[p]=bst;tp[p]=tols[bst];
     }
 
-    function isBgPixel(pi, tol){
-      var nc = nearestCluster(pi);
-      return nc.dist <= (tol !== undefined ? tol : clusterTols[nc.idx]);
-    }
-
-    /* ── 5. BFS flood-fill from all edges ───────────────────────────────── */
-    var alpha   = new Float32Array(w * h);
-    var visited = new Uint8Array(w * h);
-    var queue   = [];
-    for (var fi = 0; fi < w * h; fi++) alpha[fi] = 1; // default: foreground
-
-    function seedEdge(x, y){
-      var idx = y*w+x;
-      if (!visited[idx] && isBgPixel(idx*4)) {
-        visited[idx]=1; alpha[idx]=0; queue.push(idx);
-      }
-    }
-    for (var ex=0;ex<w;ex++){ seedEdge(ex,0); seedEdge(ex,h-1); }
-    for (var ey=1;ey<h-1;ey++){ seedEdge(0,ey); seedEdge(w-1,ey); }
-
-    var dirs=[-1,1,-w,w];
-    var qi=0;
-    while (qi < queue.length) {
-      var cur = queue[qi++];
-      for (var d=0;d<4;d++){
+    /* ── 5. BFS from border ── */
+    var alpha=new Float32Array(WH);
+    for(var i=0;i<WH;i++) alpha[i]=1;
+    var vis=new Uint8Array(WH),q=[];
+    function seed(idx){if(!vis[idx]&&nd[idx]<=tp[idx]){vis[idx]=1;alpha[idx]=0;q.push(idx);}}
+    for(var x2=0;x2<w;x2++){seed(x2);seed((h-1)*w+x2);}
+    for(var y2=1;y2<h-1;y2++){seed(y2*w);seed(y2*w+w-1);}
+    var dirs=[-1,1,-w,w],qi=0;
+    while(qi<q.length){
+      var cur=q[qi++];
+      for(var d=0;d<4;d++){
         var nb=cur+dirs[d];
-        if (nb<0||nb>=w*h) continue;
-        if (dirs[d]===-1&&cur%w===0) continue;
-        if (dirs[d]===1&&nb%w===0) continue;
-        if (!visited[nb]&&isBgPixel(nb*4)){
-          visited[nb]=1; alpha[nb]=0; queue.push(nb);
+        if(nb<0||nb>=WH)continue;
+        if(dirs[d]===-1&&cur%w===0)continue;
+        if(dirs[d]===1&&nb%w===0)continue;
+        if(!vis[nb]&&nd[nb]<=tp[nb]){vis[nb]=1;alpha[nb]=0;q.push(nb);}
+      }
+    }
+
+    prog(62,'Analysing components…');
+
+    /* ── 6. Connected components — keep largest + blobs > 1% of largest ── */
+    // Simple BFS labelling (4-connected)
+    var lab=new Int32Array(WH);var numLab=0;
+    var szMap={};
+    for(var sp=0;sp<WH;sp++){
+      if(alpha[sp]===1&&!lab[sp]){
+        numLab++;var lbl=numLab;
+        var bfsQ=[sp];var bfsI=0;var sz=0;
+        lab[sp]=lbl;
+        while(bfsI<bfsQ.length){
+          var bc=bfsQ[bfsI++];sz++;
+          for(var dd2=0;dd2<4;dd2++){
+            var bnb=bc+dirs[dd2];
+            if(bnb<0||bnb>=WH)continue;
+            if(dirs[dd2]===-1&&bc%w===0)continue;
+            if(dirs[dd2]===1&&bnb%w===0)continue;
+            if(alpha[bnb]===1&&!lab[bnb]){lab[bnb]=lbl;bfsQ.push(bnb);}
+          }
+        }
+        szMap[lbl]=sz;
+      }
+    }
+    // Find max size
+    var maxSz=0;
+    for(var lk in szMap) if(szMap[lk]>maxSz) maxSz=szMap[lk];
+    var minKeep=maxSz*0.01;
+    // Remove small components
+    for(var kp=0;kp<WH;kp++){
+      if(alpha[kp]===1&&lab[kp]&&szMap[lab[kp]]<minKeep) alpha[kp]=0;
+    }
+
+    prog(75,'Smoothing edges…');
+
+    /* ── 7. Soft alpha transition ── */
+    for(var sp2=0;sp2<WH;sp2++){
+      if(alpha[sp2]===1){
+        var soft=tp[sp2]*0.15;
+        if(nd[sp2]<tp[sp2]-soft){alpha[sp2]=0;}
+        else if(nd[sp2]<tp[sp2]+soft){
+          var denom=soft*2;if(denom<0.001)denom=0.001;
+          alpha[sp2]=(nd[sp2]-(tp[sp2]-soft))/denom;
+          if(alpha[sp2]<0)alpha[sp2]=0;if(alpha[sp2]>1)alpha[sp2]=1;
         }
       }
     }
 
-    prog(60,'Computing soft edges…');
-
-    /* ── 6. soft alpha in transition zone ───────────────────────────────── */
-    for (var sp=0; sp<w*h; sp++){
-      if (alpha[sp]===1){ // still marked as fg — check distance
-        var nc2=nearestCluster(sp*4);
-        var tol2=clusterTols[nc2.idx];
-        var soft=tol2*0.3; // transition band = 30% of tolerance
-        if (nc2.dist < tol2-soft){
-          alpha[sp]=0; // well inside bg
-        } else if (nc2.dist < tol2+soft){
-          // smooth ramp: 0 at inner edge → 1 at outer edge
-          alpha[sp]=(nc2.dist-(tol2-soft))/(soft*2);
-        }
+    /* ── 8. 3x3 box-blur feather ── */
+    var aB=new Float32Array(alpha);
+    for(var fy=1;fy<h-1;fy++){
+      for(var fx=1;fx<w-1;fx++){
+        var fi=fy*w+fx,sum=0;
+        for(var dy=-1;dy<=1;dy++) for(var dx=-1;dx<=1;dx++) sum+=alpha[(fy+dy)*w+(fx+dx)];
+        aB[fi]=sum/9;
       }
     }
 
-    prog(72,'Feathering edges…');
+    prog(92,'Compositing…');
 
-    /* ── 7. 3×3 box-blur the alpha mask to smooth jagged edges ─────────── */
-    var aBlur = new Float32Array(alpha);
-    for (var fy=1;fy<h-1;fy++){
-      for (var fx=1;fx<w-1;fx++){
-        var fi2=fy*w+fx;
-        var sum=0;
-        for (var dy=-1;dy<=1;dy++){
-          for (var dx=-1;dx<=1;dx++) sum+=alpha[(fy+dy)*w+(fx+dx)];
-        }
-        aBlur[fi2]=sum/9;
-      }
-    }
-
-    prog(82,'Removing colour spill…');
-
-    /* ── 8. colour-spill matting pass ──────────────────────────────────────
-       Pixels at the edge of the fg often have bg colour mixed in.
-       We detect semi-transparent pixels (0.05 < alpha < 0.9) whose colour is
-       close to a bg cluster and push their alpha down further.               */
-    for (var mp=0; mp<w*h; mp++){
-      var a=aBlur[mp];
-      if (a>0.05 && a<0.95){
-        var nc3=nearestCluster(mp*4);
-        var spillFactor=1-Math.min(1, nc3.dist/(clusterTols[nc3.idx]*1.5));
-        aBlur[mp]=Math.max(0, a-spillFactor*0.4);
-      }
-    }
-
-    prog(90,'Compositing…');
-
-    /* ── 9. write final RGBA output ─────────────────────────────────────── */
-    var oc=document.createElement('canvas');
-    oc.width=w; oc.height=h;
-    var octx=oc.getContext('2d');
-    var outId=octx.createImageData(w,h);
-    var od=outId.data;
-    for (var op=0;op<w*h;op++){
+    /* ── 9. Write output ── */
+    var oc=document.createElement('canvas');oc.width=w;oc.height=h;
+    var octx=oc.getContext('2d');var oid=octx.createImageData(w,h);var od=oid.data;
+    for(var op=0;op<WH;op++){
       var opi=op*4;
-      od[opi]=px[opi]; od[opi+1]=px[opi+1]; od[opi+2]=px[opi+2];
-      od[opi+3]=Math.min(255,Math.round(aBlur[op]*255));
+      od[opi]=px[opi];od[opi+1]=px[opi+1];od[opi+2]=px[opi+2];
+      od[opi+3]=Math.min(255,Math.round(aB[op]*255));
     }
-    octx.putImageData(outId,0,0);
-
+    octx.putImageData(oid,0,0);
     prog(100,'✅ Done!');
 
-    outCanvas.width=w; outCanvas.height=h;
-    var rctx=outCanvas.getContext('2d');
-    rctx.clearRect(0,0,w,h);
-    rctx.drawImage(oc,0,0);
-
-    resultLabel.textContent = '✅ Background removed automatically.';
-
+    outCanvas.width=w;outCanvas.height=h;
+    var rctx=outCanvas.getContext('2d');rctx.clearRect(0,0,w,h);rctx.drawImage(oc,0,0);
+    resultLabel.textContent='✅ Background removed.';
     dlBtn.onclick=function(){
       var a=document.createElement('a');
-      a.download=(currentFile.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';
-      a.href=outCanvas.toDataURL('image/png');
-      a.click();
+      a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';
+      a.href=outCanvas.toDataURL('image/png');a.click();
     };
-
     resultBox.style.display='block';
     resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
 
-  } catch(err){
-    showErr(err.message||'Something went wrong.');
-  } finally {
-    goBtn.disabled=false; goBtn.textContent='✨ Remove Background';
-  }
+  }catch(err){showErr(err.message||'Something went wrong.');}
+  finally{goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
 }
 
-function colorDist3(a,b){
-  var dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2];
-  return Math.sqrt(dr*dr+dg*dg+db*db);
-}
-function prog(pct,msg){ progBar.style.width=pct+'%'; statusMsg.textContent=msg; }
-function showErr(msg){
-  prog(0,''); errMsg.textContent='❌ '+msg; errMsg.style.display='block';
-  goBtn.disabled=false; goBtn.textContent='✨ Remove Background';
-}
+function cd3(a,b){var dr=a[0]-b[0],dg=a[1]-b[1],db=a[2]-b[2];return Math.sqrt(dr*dr+dg*dg+db*db);}
+function prog(pct,msg){progBar.style.width=pct+'%';statusMsg.textContent=msg;}
+function showErr(msg){prog(0,'');errMsg.textContent='❌ '+msg;errMsg.style.display='block';goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
 
 })();
 </script>
