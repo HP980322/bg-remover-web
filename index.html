@@ -49,7 +49,6 @@
       text-align:center;transition:background .15s,border-color .15s;user-select:none}
     .btn-pick:hover{background:#22223a;border-color:#7c6af7;color:#fff}
     
-    /* Updated Preview Styling */
     #fileRow{display:none;flex-direction:column;align-items:center;gap:12px;background:#0d0d12;
       border:1px solid #2a2a3a;border-radius:12px;padding:1.2rem;margin-top:.85rem;position:relative}
     #previewImg{max-width:100%;max-height:200px;border-radius:8px;border:1px solid #333;object-fit:contain}
@@ -149,7 +148,12 @@
 import { AutoModel, AutoProcessor, env, RawImage }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
 
-env.allowLocalModels=false; env.backends.onnx.wasm.proxy=false; env.backends.onnx.wasm.numThreads=1;
+// Configuration for remote model loading
+env.allowLocalModels = false;
+env.allowRemoteModels = true; 
+env.remoteHost = 'https://huggingface.co/';
+env.backends.onnx.wasm.proxy = false; 
+env.backends.onnx.wasm.numThreads = 1;
 
 const $=id=>document.getElementById(id);
 const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSub'),btnRetry=$('btnRetry'),
@@ -192,12 +196,9 @@ function setFile(f){
   cf=f;
   fileName.textContent=f.name;
   fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
-  
-  // Show image preview
   const reader = new FileReader();
-  reader.onload = e => { previewImg.src = e.target.result; };
+  reader.onload = e => { previewImg.src = e.target.result; }; // Preview logic
   reader.readAsDataURL(f);
-
   fileRow.style.display='flex';
   goBtn.style.display='block';
   resultBox.style.display='none';
@@ -208,17 +209,10 @@ function setFile(f){
 }
 
 clearBtn.addEventListener('click',()=>{
-  cf=null;
-  pick.value='';
-  fileRow.style.display='none';
-  goBtn.style.display='none';
-  resultBox.style.display='none';
-  errMsg.style.display='none';
-  statusMsg.textContent='';
-  previewImg.src='';
+  cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';
+  resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';previewImg.src='';
 });
 
-/* [cleanMask function remains the same as in source cite: 1] */
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
   function bfsLabel(arr, trackPx){
@@ -226,23 +220,12 @@ function cleanMask(maskU8, srcData, W, H) {
     let nL=0;
     for(let s=0;s<WH;s++){
       if(!arr[s]||lab[s])continue;
-      nL++;
-      const lbl=nL, q=[s]; let qi=0, sz=0, onB=false;
-      lab[s]=lbl;
-      if(trackPx)pixMap.set(lbl,[]);
+      nL++;const lbl=nL, q=[s]; let qi=0, sz=0, onB=false;
+      lab[s]=lbl;if(trackPx)pixMap.set(lbl,[]);
       while(qi<q.length){
-        const c=q[qi++]; sz++;
-        if(trackPx)pixMap.get(lbl).push(c);
-        const cx=c%W, cy=(c/W)|0;
-        if(cx<=2||cx>=W-3||cy<=2||cy>=H-3)onB=true;
-        for(let d=0;d<4;d++){
-          const nb=c+DIRS[d];
-          if(nb<0||nb>=WH)continue;
-          if(DIRS[d]===-1&&cx===0)continue;
-          if(DIRS[d]===1&&cx===W-1)continue;
-          if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}
-        }
-      }
+        const c=q[qi++]; sz++;if(trackPx)pixMap.get(lbl).push(c);
+        const cx=c%W, cy=(c/W)|0;if(cx<=2||cx>=W-3||cy<=2||cy>=H-3)onB=true;
+        for(let d=0;d<4;d++){const nb=c+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&cx===0)continue;if(DIRS[d]===1&&cx===W-1)continue;if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}}}
       sizes.push({id:lbl,size:sz,onBorder:onB});
     }
     return{lab,sizes,pixMap};
@@ -264,38 +247,23 @@ function cleanMask(maskU8, srcData, W, H) {
   for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
   const isBg=p=>nd[p]<=tp[p];
   function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
-  function isBody(p){
-    const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
-    const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
-    return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
-  }
+  function isBody(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;}
   function handleSky(b){
-    const sk=new Uint8Array(WH);
-    for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+    const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
     const{lab,sizes,pixMap}=bfsLabel(sk,true);
     for(const{id,size,onBorder}of sizes){
       if(onBorder||size>=1500)continue;
-      const px=pixMap.get(id);
-      let touchesBg=false;
+      const px=pixMap.get(id);let touchesBg=false;
       outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
-      if(touchesBg){for(const i of px)b[i]=0;}
-      else{for(const i of px)b[i]=1;}
+      if(touchesBg){for(const i of px)b[i]=0;}else{for(const i of px)b[i]=1;}
     }
   }
-  const bin=new Uint8Array(WH);
-  for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
+  const bin=new Uint8Array(WH);for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
   {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
   function score(b){
     const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
-    const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);
-    let s=0;
-    for(const{id,size,onBorder}of ss){
-      if(onBorder||size>=1500)continue;
-      const px=sp.get(id);
-      let touchesBg=false;
-      outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
-      if(touchesBg)s+=size;
-    }
+    const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);let s=0;
+    for(const{id,size,onBorder}of ss){if(onBorder||size>=1500)continue;const px=sp.get(id);let touchesBg=false;outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}if(touchesBg)s+=size;}
     const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
     const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
     for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)s+=size*2;}
@@ -303,47 +271,23 @@ function cleanMask(maskU8, srcData, W, H) {
   }
   let prev=Infinity;
   for(let iter=0;iter<8;iter++){
-    const sc=score(bin);if(sc===0||sc>=prev)break;prev=sc;
+    const sc=score(bin);if(sc===0||sc>=prev)break;prev=sc;handleSky(bin);
+    {const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)for(const i of px)bin[i]=1;}}
+    for(let pass=0;pass<2;pass++){const dil=new Uint8Array(bin);for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}const ero=new Uint8Array(dil);for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;}
     handleSky(bin);
-    {
-      const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
-      const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
-      for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)for(const i of px)bin[i]=1;}
-    }
-    for(let pass=0;pass<2;pass++){
-      const dil=new Uint8Array(bin);
-      for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
-      const ero=new Uint8Array(dil);
-      for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}
-      for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
-    }
-    handleSky(bin);
-    for(let pass=0;pass<3;pass++){
-      const prev2=new Uint8Array(bin);
-      for(let p=0;p<WH;p++){if(prev2[p])continue;let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}if(hasFg&&isBody(p))bin[p]=1;}
-    }
+    for(let pass=0;pass<3;pass++){const prev2=new Uint8Array(bin);for(let p=0;p<WH;p++){if(prev2[p])continue;let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}if(hasFg&&isBody(p))bin[p]=1;}}
     handleSky(bin);
   }
   for(let y=0;y<H;y++){
-    const rb=y*W;let rs=-1;
-    const flush=end=>{
-      const rw=end-rs;if(rw>=20){rs=-1;return;}
-      let sR=0,sG=0,sB=0,bc=0;
-      for(let x=rs;x<end;x++){const pi=(rb+x)*4;sR+=srcData[pi];sG+=srcData[pi+1];sB+=srcData[pi+2];if(isBg(rb+x))bc++;}
-      const aR=sR/rw,aG=sG/rw,aB=sB/rw,sat=Math.max(aR,aG,aB)-Math.min(aR,aG,aB);
-      if((aB-aR)>15&&bc/rw>0.60&&sat<20)for(let x=rs;x<end;x++)bin[rb+x]=0;
-      rs=-1;
-    };
-    for(let x=0;x<W;x++){if(bin[rb+x]){if(rs<0)rs=x;}else{if(rs>=0)flush(x);}}
-    if(rs>=0)flush(W);
+    const rb=y*W;let rs=-1;const flush=end=>{const rw=end-rs;if(rw>=20){rs=-1;return;}let sR=0,sG=0,sB=0,bc=0;for(let x=rs;x<end;x++){const pi=(rb+x)*4;sR+=srcData[pi];sG+=srcData[pi+1];sB+=srcData[pi+2];if(isBg(rb+x))bc++;}const aR=sR/rw,aG=sG/rw,aB=sB/rw,sat=Math.max(aR,aG,aB)-Math.min(aR,aG,aB);if((aB-aR)>15&&bc/rw>0.60&&sat<20)for(let x=rs;x<end;x++)bin[rb+x]=0;rs=-1;};
+    for(let x=0;x<W;x++){if(bin[rb+x]){if(rs<0)rs=x;}else{if(rs>=0)flush(x);}}if(rs>=0)flush(W);
   }
   {const minSz=Math.floor(WH*0.003);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
   const alpha=new Float32Array(WH);for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
   for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const ci=y*W+x;bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;}
   for(let x=0;x<W;x++){bl[x]=alpha[x];bl[(H-1)*W+x]=alpha[(H-1)*W+x];}for(let y=0;y<H;y++){bl[y*W]=alpha[y*W];bl[y*W+W-1]=alpha[y*W+W-1];}
-  const out=new Uint8Array(WH);
-  for(let i=0;i<WH;i++){const b=bl[i];out[i]=(b>0.05&&b<0.95)?Math.round(b*255):(bin[i]?255:0);}
+  const out=new Uint8Array(WH);for(let i=0;i<WH;i++){const b=bl[i];out[i]=(b>0.05&&b<0.95)?Math.round(b*255):(bin[i]?255:0);}
   return out;
 }
 
@@ -355,13 +299,12 @@ goBtn.addEventListener('click',async()=>{
   let pct=5;const tick=setInterval(()=>{if(pct<75){pct+=2;progBar.style.width=pct+'%';}},300);
   try{
     const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=e=>res(e.target.result);r.readAsDataURL(cf);});
-    const img=await new Promise((res,rej)=>{const i=new Image();i.onerror=rej;i.onload=()=>res(i);i.src=dataUrl;});
+    const img=await new Image();await new Promise((res,rej)=>{img.onerror=rej;img.onload=res;img.src=dataUrl;});
     const W=img.naturalWidth,H=img.naturalHeight;
     const srcCanvas=document.createElement('canvas');srcCanvas.width=W;srcCanvas.height=H;
     const srcCtx=srcCanvas.getContext('2d');srcCtx.drawImage(img,0,0);
     const srcData=srcCtx.getImageData(0,0,W,H).data;
-    const rgb=new Uint8ClampedArray(W*H*3);
-    for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
+    const rgb=new Uint8ClampedArray(W*H*3);for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
     const rawImg=new RawImage(rgb,W,H,3);
     statusMsg.textContent='Running AI…';progBar.style.width='30%';
     const{pixel_values}=await aiProc(rawImg);const{output}=await aiModel({input:pixel_values});
@@ -382,3 +325,15 @@ goBtn.addEventListener('click',async()=>{
     outCanvas.width=W;outCanvas.height=H;
     const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
     for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
+    outCtx.putImageData(outData,0,0);
+    progBar.style.width='100%';statusMsg.textContent='✅ Done!';resultLabel.textContent='✅ Background removed!';
+    dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
+    resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(err){
+    clearInterval(tick);console.error(err);progBar.style.width='0%';statusMsg.textContent='';
+    errMsg.textContent='❌ '+(err.message||'Something went wrong.');errMsg.style.display='block';
+  }finally{goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
+});
+</script>
+</body>
+</html>
