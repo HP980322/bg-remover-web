@@ -1,1 +1,410 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BG Remover — AI-powered, free</title>
+  <link rel="icon" type="image/png" href="data:image/png;base64,FAVICON_PLACEHOLDER"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#0d0d12;color:#e2e2e8;
+      min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2.5rem 1rem 4rem}
+    .header{display:flex;align-items:center;gap:.75rem;justify-content:center;margin-bottom:.3rem}
+    .header img{width:48px;height:48px;object-fit:contain}
+    h1{font-size:2rem;font-weight:700;text-align:center}
+    h1 span{color:#7c6af7}
+    .sub{color:#777;font-size:.9rem;text-align:center;margin-bottom:.6rem}
+    .badge{display:inline-block;background:#1a1a2e;border:1px solid #3a2f5a;border-radius:999px;
+      padding:.22rem .85rem;font-size:.73rem;color:#a89fff;margin-bottom:2rem}
+    .card{width:100%;max-width:560px;background:#15151e;border:1px solid #2a2a3a;
+      border-radius:18px;padding:1.75rem}
+    .model-bar{border:1px solid var(--bc,#2a2a3a);border-radius:12px;padding:1rem 1.2rem;
+      margin-bottom:1.5rem;text-align:center;background:#1c1c28;transition:all .3s}
+    .model-bar.ready{--bc:#1a5a3e;background:#0f1f17}
+    .model-bar.error{--bc:#6b2030;background:#1f0f14}
+    .mb-label{font-size:.85rem;margin-bottom:.55rem}
+    .mb-label.ok{color:#5dcaa5}
+    .mb-label.err{color:#e08090}
+    .mb-label.wait{color:#9d8fff}
+    .mb-track{background:#0d0d12;border-radius:6px;height:6px;overflow:hidden}
+    .mb-bar{height:100%;width:0%;background:#7c6af7;transition:width .35s}
+    .mb-bar.ok{background:#2d9e6b}
+    .mb-sub{font-size:.72rem;color:#444;margin-top:.45rem}
+    .btn-retry{display:none;margin-top:.65rem;padding:.4rem 1.2rem;background:#3a2060;
+      color:#c0a8ff;border:1px solid #6040a0;border-radius:8px;font-size:.78rem;cursor:pointer}
+    .btn-retry:hover{background:#4a2878}
+    .upload-area{display:block;border:2px dashed #333;border-radius:12px;padding:2.5rem 1rem;
+      text-align:center;cursor:pointer;transition:border-color .15s,background .15s;
+      background:#0d0d12;user-select:none}
+    .upload-area:hover,.upload-area.over{border-color:#7c6af7;background:#0e0c1c}
+    .upload-area .icon{font-size:2rem;display:block;margin-bottom:.6rem}
+    .upload-area strong{display:block;font-size:.92rem;color:#d0d0e0;margin-bottom:.25rem}
+    .upload-area small{font-size:.76rem;color:#555}
+    #pick{position:absolute;left:-9999px;opacity:0}
+    .or{display:flex;align-items:center;gap:8px;margin:.9rem 0}
+    .or hr{flex:1;border:none;border-top:1px solid #222}
+    .or span{font-size:.72rem;color:#444}
+    .btn-pick{display:block;width:100%;padding:.7rem;background:#1c1c28;color:#bbb;
+      border:1px solid #2a2a3a;border-radius:10px;font-size:.88rem;cursor:pointer;
+      text-align:center;transition:background .15s,border-color .15s;user-select:none}
+    .btn-pick:hover{background:#22223a;border-color:#7c6af7;color:#fff}
+    #fileRow{display:none;align-items:center;gap:10px;background:#1c1c28;
+      border:1px solid #2a2a3a;border-radius:10px;padding:.6rem 1rem;margin-top:.85rem}
+    #fileRow .name{flex:1;font-size:.82rem;color:#d0d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #fileRow .size{font-size:.72rem;color:#666;flex-shrink:0}
+    #clearBtn{background:none;border:none;color:#555;font-size:15px;cursor:pointer;padding:4px}
+    #clearBtn:hover{color:#e07070}
+    #goBtn{display:none;width:100%;padding:.78rem;background:#2d9e6b;color:#fff;
+      border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
+      margin-top:.85rem;transition:background .15s}
+    #goBtn:hover{background:#1f7a50}
+    #goBtn:disabled{background:#1a5a3e;color:#556;cursor:not-allowed}
+    #progWrap{display:none;background:#0d0d12;border-radius:6px;height:7px;overflow:hidden;margin-top:.85rem}
+    #progBar{height:100%;width:0%;background:#7c6af7;transition:width .35s}
+    #statusMsg{margin-top:.65rem;font-size:.8rem;color:#9d8fff;text-align:center;min-height:1.1rem}
+    #errMsg{display:none;background:#1f0f14;border:1px solid #6b2030;border-radius:10px;
+      padding:.7rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.6}
+    .pills{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.1rem}
+    .pill{font-size:.67rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;color:#444;background:#0d0d14}
+    #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
+      background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem;text-align:center}
+    #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem}
+    #outCanvas{max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
+      background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
+    #dlBtn{display:inline-block;margin-top:.85rem;padding:.58rem 1.8rem;
+      background:#2d9e6b;color:#fff;border:none;border-radius:8px;
+      font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s}
+    #dlBtn:hover{background:#1f7a50}
+    footer{margin-top:2.5rem;font-size:.72rem;color:#444;text-align:center;line-height:1.8}
+    footer a{color:#444}
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <img src="data:image/png;base64,LOGO128_PLACEHOLDER" alt="Coco">
+  <h1>BG <span>Remover</span></h1>
+</div>
+<p class="sub">AI background removal — free, no sign-up, runs in your browser</p>
+<span class="badge">&#10003; Free &nbsp; &#10003; No sign-up &nbsp; &#10003; AI-powered &nbsp; &#10003; Images only</span>
+
+<div class="card">
+  <div class="model-bar" id="modelBar">
+    <div class="mb-label wait" id="mbLabel">&#8987; Loading AI model for the first time…</div>
+    <div class="mb-track"><div class="mb-bar" id="mbBar"></div></div>
+    <div class="mb-sub" id="mbSub">Downloading ~175 MB once — cached in your browser forever</div>
+    <button class="btn-retry" id="btnRetry">&#8635; Try again</button>
+  </div>
+
+  <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp">
+  <label class="upload-area" for="pick" id="dropArea">
+    <span class="icon">&#128247;</span>
+    <strong>Drop image here or click to browse</strong>
+    <small>PNG &bull; JPG &bull; WEBP &bull; BMP &bull; Images only</small>
+  </label>
+  <div class="or"><hr><span>or</span><hr></div>
+  <label class="btn-pick" for="pick">&#128193; Choose image file</label>
+
+  <div id="fileRow">
+    <span style="font-size:18px">&#128444;</span>
+    <span class="name" id="fileName"></span>
+    <span class="size" id="fileSize"></span>
+    <button id="clearBtn" type="button">&#10005;</button>
+  </div>
+
+  <button id="goBtn" type="button">&#10024; Remove Background</button>
+  <div id="progWrap"><div id="progBar"></div></div>
+  <p id="statusMsg"></p>
+  <div id="errMsg"></div>
+
+  <div class="pills">
+    <span class="pill">RMBG-1.4 AI</span>
+    <span class="pill">Self-checking</span>
+    <span class="pill">No upload</span>
+    <span class="pill">100% private</span>
+    <span class="pill">Images only</span>
+  </div>
+</div>
+
+<div id="resultBox">
+  <div id="resultLabel">&#9989; Background removed!</div>
+  <canvas id="outCanvas"></canvas><br>
+  <button id="dlBtn" type="button">&#8659; Download PNG</button>
+</div>
+
+<footer>
+  AI runs entirely in your browser &mdash; images never leave your device &bull;
+  Powered by <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank">BRIA RMBG-1.4</a> &bull;
+  Images only &mdash; video not supported
+</footer>
+
+<script type="module">
+import { AutoModel, AutoProcessor, env, RawImage }
+  from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/transformers.min.js';
+
+env.allowLocalModels=false; env.backends.onnx.wasm.proxy=false; env.backends.onnx.wasm.numThreads=1;
+
+const $=id=>document.getElementById(id);
+const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSub'),btnRetry=$('btnRetry'),
+      pick=$('pick'),dropArea=$('dropArea'),fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
+      clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
+      statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),resultLabel=$('resultLabel'),
+      outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
+
+let aiModel=null,aiProc=null,cf=null,attempt=0;
+
+async function loadModel(){
+  attempt++;aiModel=aiProc=null;btnRetry.style.display='none';
+  mbBar.style.width='0%';mbBar.className='mb-bar';modelBar.className='model-bar';mbLabel.className='mb-label wait';
+  mbLabel.textContent=attempt===1?'⏳ Loading AI model for the first time…':`⏳ Loading AI model (attempt ${attempt})…`;
+  mbSub.textContent='Downloading ~175 MB once — cached in your browser forever';
+  const onProg=p=>{
+    if(p.status==='progress'&&p.total){const pct=Math.round(p.loaded/p.total*100);mbBar.style.width=pct+'%';mbSub.textContent=`Downloading… ${pct}%  (${(p.loaded/1048576).toFixed(1)} / ${(p.total/1048576).toFixed(1)} MB)`;}
+    if(p.status==='done')mbSub.textContent='Almost ready…';
+  };
+  try{
+    if(attempt>1)await new Promise(r=>setTimeout(r,1500));
+    aiModel=await AutoModel.from_pretrained('briaai/RMBG-1.4',{config:{model_type:'custom'},progress_callback:onProg});
+    aiProc=await AutoProcessor.from_pretrained('briaai/RMBG-1.4',{config:{do_normalize:true,do_pad:false,do_rescale:true,do_resize:true,image_mean:[0.5,0.5,0.5],image_std:[1.0,1.0,1.0],resample:2,rescale_factor:0.00392156862745098,size:{width:1024,height:1024}}});
+    modelBar.className='model-bar ready';mbLabel.className='mb-label ok';mbLabel.textContent='✅ AI ready — drop an image to get started!';
+    mbBar.style.width='100%';mbBar.className='mb-bar ok';mbSub.textContent=attempt===1?'Cached — instant on next visit':'Loaded!';
+  }catch(err){
+    console.error('Model load failed (attempt '+attempt+'):',err);
+    if(attempt===1){mbLabel.textContent='⏳ Still loading, please wait…';mbSub.textContent='Retrying automatically…';setTimeout(loadModel,2000);}
+    else{modelBar.className='model-bar error';mbLabel.className='mb-label err';mbLabel.textContent='❌ Could not load model.';mbSub.textContent='Check your connection, then click Try again.';btnRetry.style.display='inline-block';}
+  }
+}
+btnRetry.onclick=loadModel;loadModel();
+
+pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);});
+dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
+dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
+dropArea.addEventListener('drop',e=>{e.preventDefault();dropArea.classList.remove('over');const f=e.dataTransfer?.files?.[0];if(f)setFile(f);});
+function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';fileRow.style.display='flex';goBtn.style.display='block';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';}
+clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// cleanMask — v16 final
+// • Smart sky: edge-touching = remove, enclosed = fill (no dirty holes on cloth)
+// • Warm-ratio body dilation catches dark sleeves (R > G×1.2, R > B×1.2, sat>25)
+// • handleSky() called after closing AND dilation to prevent oscillation
+// • O(n) BFS border detection built into labeller
+// ══════════════════════════════════════════════════════════════════════════════
+function cleanMask(maskU8, srcData, W, H) {
+  const WH=W*H, DIRS=[-1,1,-W,W];
+
+  function bfsLabel(arr, trackPx){
+    const lab=new Int32Array(WH), sizes=[], pixMap=trackPx?new Map():null;
+    let nL=0;
+    for(let s=0;s<WH;s++){
+      if(!arr[s]||lab[s])continue;
+      nL++;
+      const lbl=nL, q=[s]; let qi=0, sz=0, onB=false;
+      lab[s]=lbl;
+      if(trackPx)pixMap.set(lbl,[]);
+      while(qi<q.length){
+        const c=q[qi++]; sz++;
+        if(trackPx)pixMap.get(lbl).push(c);
+        const cx=c%W, cy=(c/W)|0;
+        if(cx<=2||cx>=W-3||cy<=2||cy>=H-3)onB=true;
+        for(let d=0;d<4;d++){
+          const nb=c+DIRS[d];
+          if(nb<0||nb>=WH)continue;
+          if(DIRS[d]===-1&&cx===0)continue;
+          if(DIRS[d]===1&&cx===W-1)continue;
+          if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}
+        }
+      }
+      sizes.push({id:lbl,size:sz,onBorder:onB});
+    }
+    return{lab,sizes,pixMap};
+  }
+
+  const smp=[];
+  for(let x=0;x<W;x+=3){const t=x*4,b=((H-1)*W+x)*4;smp.push([srcData[t],srcData[t+1],srcData[t+2]]);smp.push([srcData[b],srcData[b+1],srcData[b+2]]);}
+  for(let y=1;y<H-1;y+=3){const l=y*W*4,r=(y*W+W-1)*4;smp.push([srcData[l],srcData[l+1],srcData[l+2]]);smp.push([srcData[r],srcData[r+1],srcData[r+2]]);}
+  const K=8,N=smp.length;
+  const cents=Array.from({length:K},(_,ki)=>smp[Math.floor(ki*N/K)].slice());
+  for(let it=0;it<20;it++){
+    const ss=Array.from({length:K},()=>[0,0,0]),cc=new Int32Array(K);
+    for(let i=0;i<N;i++){const s=smp[i];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=s[0]-cents[k][0],dg=s[1]-cents[k][1],db=s[2]-cents[k][2],d=dr*dr+dg*dg+db*db;if(d<bd){bd=d;bk=k;}}ss[bk][0]+=s[0];ss[bk][1]+=s[1];ss[bk][2]+=s[2];cc[bk]++;}
+    for(let k=0;k<K;k++)if(cc[k]>0)cents[k]=[ss[k][0]/cc[k],ss[k][1]/cc[k],ss[k][2]/cc[k]];
+  }
+  const cD=Array.from({length:K},()=>[]);
+  for(let i=0;i<N;i++){const s=smp[i];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=s[0]-cents[k][0],dg=s[1]-cents[k][1],db=s[2]-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db*db);if(d<bd){bd=d;bk=k;}}cD[bk].push(bd);}
+  const tols=cD.map(a=>{if(!a.length)return 26;const m=a.reduce((s,v)=>s+v,0)/a.length,std=Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length);return Math.max(22,Math.min(62,m+2.5*std+12));});
+  const nd=new Float32Array(WH),tp=new Float32Array(WH);
+  for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
+  const isBg=p=>nd[p]<=tp[p];
+
+  function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
+
+  function isBody(p){
+    const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
+    const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
+    return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
+  }
+
+  // Key insight: sky pixels at the MASK EDGE = remove; sky pixels ENCLOSED by fg = fill (they're holes)
+  function handleSky(b){
+    const sk=new Uint8Array(WH);
+    for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+    const{lab,sizes,pixMap}=bfsLabel(sk,true);
+    for(const{id,size,onBorder}of sizes){
+      if(onBorder||size>=1500)continue;
+      const px=pixMap.get(id);
+      let touchesBg=false;
+      outer: for(const p of px){
+        for(let d=0;d<4;d++){
+          const nb=p+DIRS[d];
+          if(nb<0||nb>=WH)continue;
+          if(DIRS[d]===-1&&p%W===0)continue;
+          if(DIRS[d]===1&&nb%W===0)continue;
+          if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}
+        }
+      }
+      if(touchesBg){for(const i of px)b[i]=0;}
+      else{for(const i of px)b[i]=1;}
+    }
+  }
+
+  const bin=new Uint8Array(WH);
+  for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
+
+  {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
+
+  function score(b){
+    const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+    const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);
+    let s=0;
+    for(const{id,size,onBorder}of ss){
+      if(onBorder||size>=1500)continue;
+      const px=sp.get(id);
+      let touchesBg=false;
+      outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
+      if(touchesBg)s+=size;
+    }
+    const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
+    const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
+    const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
+    for(const{id,size,onBorder}of bgS){
+      if(onBorder||!size)continue;
+      const px=bgP.get(id);
+      const bf=px.filter(isBg).length/size;
+      if(bf<0.70)s+=size*2;
+    }
+    return s;
+  }
+
+  let prev=Infinity;
+  for(let iter=0;iter<8;iter++){
+    const sc=score(bin);
+    if(sc===0||sc>=prev)break;
+    prev=sc;
+
+    handleSky(bin);
+
+    {
+      const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
+      const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
+      const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
+      for(const{id,size,onBorder}of bgS){
+        if(onBorder||!size)continue;
+        const px=bgP.get(id);
+        const bf=px.filter(isBg).length/size;
+        if(bf<0.70)for(const i of px)bin[i]=1;
+      }
+    }
+
+    for(let pass=0;pass<2;pass++){
+      const dil=new Uint8Array(bin);
+      for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
+      const ero=new Uint8Array(dil);
+      for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}
+      for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
+    }
+    handleSky(bin);
+
+    for(let pass=0;pass<3;pass++){
+      const prev2=new Uint8Array(bin);
+      for(let p=0;p<WH;p++){
+        if(prev2[p])continue;
+        let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}
+        if(hasFg&&isBody(p))bin[p]=1;
+      }
+    }
+    handleSky(bin);
+  }
+
+  for(let y=0;y<H;y++){
+    const rb=y*W;let rs=-1;
+    const flush=end=>{
+      const rw=end-rs;if(rw>=20){rs=-1;return;}
+      let sR=0,sG=0,sB=0,bc=0;
+      for(let x=rs;x<end;x++){const pi=(rb+x)*4;sR+=srcData[pi];sG+=srcData[pi+1];sB+=srcData[pi+2];if(isBg(rb+x))bc++;}
+      const aR=sR/rw,aG=sG/rw,aB=sB/rw,sat=Math.max(aR,aG,aB)-Math.min(aR,aG,aB);
+      if((aB-aR)>15&&bc/rw>0.60&&sat<20)for(let x=rs;x<end;x++)bin[rb+x]=0;
+      rs=-1;
+    };
+    for(let x=0;x<W;x++){if(bin[rb+x]){if(rs<0)rs=x;}else{if(rs>=0)flush(x);}}
+    if(rs>=0)flush(W);
+  }
+
+  {const minSz=Math.floor(WH*0.003);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
+
+  const alpha=new Float32Array(WH);for(let i=0;i<WH;i++)alpha[i]=bin[i];
+  const bl=new Float32Array(WH);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const ci=y*W+x;bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;}
+  for(let x=0;x<W;x++){bl[x]=alpha[x];bl[(H-1)*W+x]=alpha[(H-1)*W+x];}for(let y=0;y<H;y++){bl[y*W]=alpha[y*W];bl[y*W+W-1]=alpha[y*W+W-1];}
+  const out=new Uint8Array(WH);
+  for(let i=0;i<WH;i++){const b=bl[i];out[i]=(b>0.05&&b<0.95)?Math.round(b*255):(bin[i]?255:0);}
+  return out;
+}
+
+goBtn.addEventListener('click',async()=>{
+  if(!cf)return;
+  if(!aiModel||!aiProc){errMsg.textContent='⚠ AI model is still loading — please wait.';errMsg.style.display='block';return;}
+  goBtn.disabled=true;goBtn.textContent='Processing…';errMsg.style.display='none';resultBox.style.display='none';
+  progWrap.style.display='block';progBar.style.width='5%';statusMsg.textContent='Reading image…';
+  let pct=5;const tick=setInterval(()=>{if(pct<75){pct+=2;progBar.style.width=pct+'%';}},300);
+  try{
+    const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=e=>res(e.target.result);r.readAsDataURL(cf);});
+    const img=await new Promise((res,rej)=>{const i=new Image();i.onerror=rej;i.onload=()=>res(i);i.src=dataUrl;});
+    const W=img.naturalWidth,H=img.naturalHeight;
+    const srcCanvas=document.createElement('canvas');srcCanvas.width=W;srcCanvas.height=H;
+    const srcCtx=srcCanvas.getContext('2d');srcCtx.drawImage(img,0,0);
+    const srcData=srcCtx.getImageData(0,0,W,H).data;
+    const rgb=new Uint8ClampedArray(W*H*3);
+    for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
+    const rawImg=new RawImage(rgb,W,H,3);
+    statusMsg.textContent='Running AI…';progBar.style.width='30%';
+    const{pixel_values}=await aiProc(rawImg);const{output}=await aiModel({input:pixel_values});
+    clearInterval(tick);progBar.style.width='80%';statusMsg.textContent='Self-checking mask…';
+    const maskTensor=output[0].squeeze();const maskFlat=maskTensor.data;
+    const mH=maskTensor.dims[0],mW=maskTensor.dims[1];
+    const mCanvas=document.createElement('canvas');mCanvas.width=mW;mCanvas.height=mH;
+    const mCtx=mCanvas.getContext('2d');const mPx=mCtx.createImageData(mW,mH);
+    for(let i=0;i<maskFlat.length;i++){const v=Math.round(maskFlat[i]*255);mPx.data[i*4]=mPx.data[i*4+1]=mPx.data[i*4+2]=v;mPx.data[i*4+3]=255;}
+    mCtx.putImageData(mPx,0,0);
+    const sCanvas=document.createElement('canvas');sCanvas.width=W;sCanvas.height=H;
+    const sCtx=sCanvas.getContext('2d');sCtx.drawImage(mCanvas,0,0,W,H);
+    const rawMask=sCtx.getImageData(0,0,W,H).data;
+    const maskU8=new Uint8Array(W*H);for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
+    progBar.style.width='87%';statusMsg.textContent='Iterative cleanup…';
+    const cleanAlpha=cleanMask(maskU8,srcData,W,H);
+    progBar.style.width='96%';statusMsg.textContent='Compositing…';
+    outCanvas.width=W;outCanvas.height=H;
+    const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
+    for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
+    outCtx.putImageData(outData,0,0);
+    progBar.style.width='100%';statusMsg.textContent='✅ Done!';resultLabel.textContent='✅ Background removed!';
+    dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
+    resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(err){
+    clearInterval(tick);console.error(err);progBar.style.width='0%';statusMsg.textContent='';
+    errMsg.textContent='❌ '+(err.message||'Something went wrong.');errMsg.style.display='block';
+  }finally{goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
+});
+</script>
+</body>
+</html>
