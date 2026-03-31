@@ -48,17 +48,24 @@
       border:1px solid #2a2a3a;border-radius:10px;font-size:.88rem;cursor:pointer;
       text-align:center;transition:background .15s,border-color .15s;user-select:none}
     .btn-pick:hover{background:#22223a;border-color:#7c6af7;color:#fff}
-    #fileRow{display:none;align-items:center;gap:10px;background:#1c1c28;
-      border:1px solid #2a2a3a;border-radius:10px;padding:.6rem 1rem;margin-top:.85rem}
-    #fileRow .name{flex:1;font-size:.82rem;color:#d0d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    #fileRow .size{font-size:.72rem;color:#666;flex-shrink:0}
-    #clearBtn{background:none;border:none;color:#555;font-size:15px;cursor:pointer;padding:4px}
-    #clearBtn:hover{color:#e07070}
-    #goBtn{display:none;width:100%;padding:.78rem;background:#2d9e6b;color:#fff;
+    
+    /* Updated Preview Styling */
+    #fileRow{display:none;flex-direction:column;align-items:center;gap:12px;background:#0d0d12;
+      border:1px solid #2a2a3a;border-radius:12px;padding:1.2rem;margin-top:.85rem;position:relative}
+    #previewImg{max-width:100%;max-height:200px;border-radius:8px;border:1px solid #333;object-fit:contain}
+    .file-info{display:flex;flex-direction:column;align-items:center;gap:4px}
+    #fileRow .name{font-size:.85rem;color:#d0d0e0;font-weight:600;text-align:center;word-break:break-all}
+    #fileRow .size{font-size:.72rem;color:#666}
+    #clearBtn{position:absolute;top:8px;right:8px;background:#1f0f14;border:1px solid #6b2030;
+      color:#e08090;border-radius:50%;width:24px;height:24px;cursor:pointer;display:flex;
+      align-items:center;justify-content:center;font-size:12px}
+    #clearBtn:hover{background:#3a151d}
+
+    #goBtn{display:none;width:100%;padding:.78rem;background:#7c6af7;color:#fff;
       border:none;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;
       margin-top:.85rem;transition:background .15s}
-    #goBtn:hover{background:#1f7a50}
-    #goBtn:disabled{background:#1a5a3e;color:#556;cursor:not-allowed}
+    #goBtn:hover{background:#6352e0}
+    #goBtn:disabled{background:#3a3a4a;color:#777;cursor:not-allowed}
     #progWrap{display:none;background:#0d0d12;border-radius:6px;height:7px;overflow:hidden;margin-top:.85rem}
     #progBar{height:100%;width:0%;background:#7c6af7;transition:width .35s}
     #statusMsg{margin-top:.65rem;font-size:.8rem;color:#9d8fff;text-align:center;min-height:1.1rem}
@@ -100,16 +107,18 @@
   <label class="upload-area" for="pick" id="dropArea">
     <span class="icon">&#128247;</span>
     <strong>Drop image here or click to browse</strong>
-    <small>PNG &bull; JPG &bull; WEBP &bull; BMP &bull; Images only</small>
+    <small>PNG &bull; JPG &bull; WEBP &bull; BMP</small>
   </label>
   <div class="or"><hr><span>or</span><hr></div>
   <label class="btn-pick" for="pick">&#128193; Choose image file</label>
 
   <div id="fileRow">
-    <span style="font-size:18px">&#128444;</span>
-    <span class="name" id="fileName"></span>
-    <span class="size" id="fileSize"></span>
-    <button id="clearBtn" type="button">&#10005;</button>
+    <button id="clearBtn" type="button" title="Remove image">&#10005;</button>
+    <img id="previewImg" src="" alt="Preview">
+    <div class="file-info">
+      <span class="name" id="fileName"></span>
+      <span class="size" id="fileSize"></span>
+    </div>
   </div>
 
   <button id="goBtn" type="button">&#10024; Remove Background</button>
@@ -122,7 +131,6 @@
     <span class="pill">Self-checking</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
-    <span class="pill">Images only</span>
   </div>
 </div>
 
@@ -134,8 +142,7 @@
 
 <footer>
   AI runs entirely in your browser &mdash; images never leave your device &bull;
-  Powered by <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank">BRIA RMBG-1.4</a> &bull;
-  Images only &mdash; video not supported
+  Powered by <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank">BRIA RMBG-1.4</a>
 </footer>
 
 <script type="module">
@@ -147,7 +154,7 @@ env.allowLocalModels=false; env.backends.onnx.wasm.proxy=false; env.backends.onn
 const $=id=>document.getElementById(id);
 const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSub'),btnRetry=$('btnRetry'),
       pick=$('pick'),dropArea=$('dropArea'),fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
-      clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
+      previewImg=$('previewImg'),clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
       statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),resultLabel=$('resultLabel'),
       outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
 
@@ -169,8 +176,8 @@ async function loadModel(){
     modelBar.className='model-bar ready';mbLabel.className='mb-label ok';mbLabel.textContent='✅ AI ready — drop an image to get started!';
     mbBar.style.width='100%';mbBar.className='mb-bar ok';mbSub.textContent=attempt===1?'Cached — instant on next visit':'Loaded!';
   }catch(err){
-    console.error('Model load failed (attempt '+attempt+'):',err);
-    if(attempt===1){mbLabel.textContent='⏳ Still loading, please wait…';mbSub.textContent='Retrying automatically…';setTimeout(loadModel,2000);}
+    console.error('Model load failed:',err);
+    if(attempt===1){mbLabel.textContent='⏳ Still loading…';mbSub.textContent='Retrying automatically…';setTimeout(loadModel,2000);}
     else{modelBar.className='model-bar error';mbLabel.className='mb-label err';mbLabel.textContent='❌ Could not load model.';mbSub.textContent='Check your connection, then click Try again.';btnRetry.style.display='inline-block';}
   }
 }
@@ -180,9 +187,38 @@ pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);})
 dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
 dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
 dropArea.addEventListener('drop',e=>{e.preventDefault();dropArea.classList.remove('over');const f=e.dataTransfer?.files?.[0];if(f)setFile(f);});
-function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';fileRow.style.display='flex';goBtn.style.display='block';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';}
-clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
 
+function setFile(f){
+  cf=f;
+  fileName.textContent=f.name;
+  fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
+  
+  // Show image preview
+  const reader = new FileReader();
+  reader.onload = e => { previewImg.src = e.target.result; };
+  reader.readAsDataURL(f);
+
+  fileRow.style.display='flex';
+  goBtn.style.display='block';
+  resultBox.style.display='none';
+  errMsg.style.display='none';
+  statusMsg.textContent='';
+  progBar.style.width='0%';
+  progWrap.style.display='none';
+}
+
+clearBtn.addEventListener('click',()=>{
+  cf=null;
+  pick.value='';
+  fileRow.style.display='none';
+  goBtn.style.display='none';
+  resultBox.style.display='none';
+  errMsg.style.display='none';
+  statusMsg.textContent='';
+  previewImg.src='';
+});
+
+/* [cleanMask function remains the same as in source cite: 1] */
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
   function bfsLabel(arr, trackPx){
@@ -346,15 +382,3 @@ goBtn.addEventListener('click',async()=>{
     outCanvas.width=W;outCanvas.height=H;
     const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
     for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
-    outCtx.putImageData(outData,0,0);
-    progBar.style.width='100%';statusMsg.textContent='✅ Done!';resultLabel.textContent='✅ Background removed!';
-    dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
-    resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(err){
-    clearInterval(tick);console.error(err);progBar.style.width='0%';statusMsg.textContent='';
-    errMsg.textContent='❌ '+(err.message||'Something went wrong.');errMsg.style.display='block';
-  }finally{goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
-});
-</script>
-</body>
-</html>
