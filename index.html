@@ -33,13 +33,24 @@
     .btn-retry{display:none;margin-top:.65rem;padding:.4rem 1.2rem;background:#3a2060;
       color:#c0a8ff;border:1px solid #6040a0;border-radius:8px;font-size:.78rem;cursor:pointer}
     .btn-retry:hover{background:#4a2878}
-    .upload-area{display:block;border:2px dashed #333;border-radius:12px;padding:2.5rem 1rem;
-      text-align:center;cursor:pointer;transition:border-color .15s,background .15s;
-      background:#0d0d12;user-select:none}
+    /* Upload area — shows image preview when loaded */
+    .upload-area{position:relative;display:block;border:2px dashed #333;border-radius:12px;
+      min-height:140px;text-align:center;cursor:pointer;overflow:hidden;
+      transition:border-color .15s,background .15s;background:#0d0d12;user-select:none}
     .upload-area:hover,.upload-area.over{border-color:#7c6af7;background:#0e0c1c}
+    .upload-area.has-img{border-color:#3a3a5a;background:#0d0d12;min-height:0}
+    .upload-placeholder{padding:2.5rem 1rem;pointer-events:none}
     .upload-area .icon{font-size:2rem;display:block;margin-bottom:.6rem}
     .upload-area strong{display:block;font-size:.92rem;color:#d0d0e0;margin-bottom:.25rem}
     .upload-area small{font-size:.76rem;color:#555}
+    #previewImg{display:none;width:100%;max-height:340px;object-fit:contain;
+      border-radius:10px;pointer-events:none}
+    .upload-area.has-img #previewImg{display:block}
+    .upload-area.has-img .upload-placeholder{display:none}
+    .preview-badge{display:none;position:absolute;bottom:8px;right:8px;
+      background:rgba(0,0,0,.65);color:#aaa;font-size:.68rem;
+      padding:3px 8px;border-radius:6px;pointer-events:none}
+    .upload-area.has-img .preview-badge{display:block}
     #pick{position:absolute;left:-9999px;opacity:0}
     .or{display:flex;align-items:center;gap:8px;margin:.9rem 0}
     .or hr{flex:1;border:none;border-top:1px solid #222}
@@ -66,14 +77,20 @@
       padding:.7rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.6}
     .pills{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.1rem}
     .pill{font-size:.67rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;color:#444;background:#0d0d14}
+    /* Result box — side by side comparison */
     #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
-      background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem;text-align:center}
-    #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem}
-    #outCanvas{max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
-      background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
-    #dlBtn{display:inline-block;margin-top:.85rem;padding:.58rem 1.8rem;
+      background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem}
+    #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem;text-align:center}
+    .compare-wrap{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .compare-wrap figure{margin:0;text-align:center}
+    .compare-wrap figcaption{font-size:.68rem;color:#555;margin-bottom:4px}
+    #origPreview{width:100%;border-radius:8px;border:1px solid #2a2a3a;object-fit:contain;max-height:260px}
+    #outCanvas{width:100%;border-radius:8px;border:1px solid #2a2a3a;
+      background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px;
+      max-height:260px;object-fit:contain}
+    #dlBtn{display:block;width:100%;margin-top:.85rem;padding:.58rem 1.8rem;
       background:#2d9e6b;color:#fff;border:none;border-radius:8px;
-      font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s}
+      font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s;text-align:center}
     #dlBtn:hover{background:#1f7a50}
     footer{margin-top:2.5rem;font-size:.72rem;color:#444;text-align:center;line-height:1.8}
     footer a{color:#444}
@@ -98,9 +115,13 @@
 
   <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp">
   <label class="upload-area" for="pick" id="dropArea">
-    <span class="icon">&#128247;</span>
-    <strong>Drop image here or click to browse</strong>
-    <small>PNG &bull; JPG &bull; WEBP &bull; BMP &bull; Images only</small>
+    <div class="upload-placeholder">
+      <span class="icon">&#128247;</span>
+      <strong>Drop image here or click to browse</strong>
+      <small>PNG &bull; JPG &bull; WEBP &bull; BMP</small>
+    </div>
+    <img id="previewImg" alt="preview">
+    <span class="preview-badge">click to change</span>
   </label>
   <div class="or"><hr><span>or</span><hr></div>
   <label class="btn-pick" for="pick">&#128193; Choose image file</label>
@@ -128,7 +149,16 @@
 
 <div id="resultBox">
   <div id="resultLabel">&#9989; Background removed!</div>
-  <canvas id="outCanvas"></canvas><br>
+  <div class="compare-wrap">
+    <figure>
+      <figcaption>Original</figcaption>
+      <img id="origPreview" alt="original">
+    </figure>
+    <figure>
+      <figcaption>Result</figcaption>
+      <canvas id="outCanvas"></canvas>
+    </figure>
+  </div>
   <button id="dlBtn" type="button">&#8659; Download PNG</button>
 </div>
 
@@ -146,10 +176,11 @@ env.allowLocalModels=false; env.backends.onnx.wasm.proxy=false; env.backends.onn
 
 const $=id=>document.getElementById(id);
 const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSub'),btnRetry=$('btnRetry'),
-      pick=$('pick'),dropArea=$('dropArea'),fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
+      pick=$('pick'),dropArea=$('dropArea'),previewImg=$('previewImg'),
+      fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
       clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
       statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),resultLabel=$('resultLabel'),
-      outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
+      origPreview=$('origPreview'),outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
 
 let aiModel=null,aiProc=null,cf=null,attempt=0;
 
@@ -180,15 +211,34 @@ pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);})
 dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
 dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
 dropArea.addEventListener('drop',e=>{e.preventDefault();dropArea.classList.remove('over');const f=e.dataTransfer?.files?.[0];if(f)setFile(f);});
-function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';fileRow.style.display='flex';goBtn.style.display='block';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';}
-clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
+
+function setFile(f){
+  cf=f;
+  fileName.textContent=f.name;
+  fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
+  fileRow.style.display='flex';
+  goBtn.style.display='block';
+  resultBox.style.display='none';
+  errMsg.style.display='none';
+  statusMsg.textContent='';
+  progBar.style.width='0%';
+  progWrap.style.display='none';
+  // Show preview in upload box
+  const url=URL.createObjectURL(f);
+  previewImg.src=url;
+  previewImg.onload=()=>URL.revokeObjectURL(url);
+  dropArea.classList.add('has-img');
+}
+
+clearBtn.addEventListener('click',()=>{
+  cf=null;pick.value='';
+  fileRow.style.display='none';goBtn.style.display='none';
+  resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';
+  previewImg.src='';dropArea.classList.remove('has-img');
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // cleanMask — v16 final
-// • Smart sky: edge-touching = remove, enclosed = fill (no dirty holes on cloth)
-// • Warm-ratio body dilation catches dark sleeves (R > G×1.2, R > B×1.2, sat>25)
-// • handleSky() called after closing AND dilation to prevent oscillation
-// • O(n) BFS border detection built into labeller
 // ══════════════════════════════════════════════════════════════════════════════
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
@@ -238,7 +288,6 @@ function cleanMask(maskU8, srcData, W, H) {
   const isBg=p=>nd[p]<=tp[p];
 
   function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
-
   function isBody(p){
     const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
     const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
@@ -269,7 +318,6 @@ function cleanMask(maskU8, srcData, W, H) {
 
   const bin=new Uint8Array(WH);
   for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
-
   {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
 
   function score(b){
@@ -286,12 +334,7 @@ function cleanMask(maskU8, srcData, W, H) {
     const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
     const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
     const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-    for(const{id,size,onBorder}of bgS){
-      if(onBorder||!size)continue;
-      const px=bgP.get(id);
-      const bf=px.filter(isBg).length/size;
-      if(bf<0.70)s+=size*2;
-    }
+    for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)s+=size*2;}
     return s;
   }
 
@@ -300,21 +343,13 @@ function cleanMask(maskU8, srcData, W, H) {
     const sc=score(bin);
     if(sc===0||sc>=prev)break;
     prev=sc;
-
     handleSky(bin);
-
     {
       const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
       const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
       const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-      for(const{id,size,onBorder}of bgS){
-        if(onBorder||!size)continue;
-        const px=bgP.get(id);
-        const bf=px.filter(isBg).length/size;
-        if(bf<0.70)for(const i of px)bin[i]=1;
-      }
+      for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)for(const i of px)bin[i]=1;}
     }
-
     for(let pass=0;pass<2;pass++){
       const dil=new Uint8Array(bin);
       for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
@@ -323,7 +358,6 @@ function cleanMask(maskU8, srcData, W, H) {
       for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
     handleSky(bin);
-
     for(let pass=0;pass<3;pass++){
       const prev2=new Uint8Array(bin);
       for(let p=0;p<WH;p++){
@@ -396,6 +430,8 @@ goBtn.addEventListener('click',async()=>{
     const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
     for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
     outCtx.putImageData(outData,0,0);
+    // Show original image in the comparison
+    origPreview.src=dataUrl;
     progBar.style.width='100%';statusMsg.textContent='✅ Done!';resultLabel.textContent='✅ Background removed!';
     dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
     resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
