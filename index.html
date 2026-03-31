@@ -44,8 +44,10 @@
     .upload-placeholder .icon{font-size:2rem;display:block;margin-bottom:.6rem}
     .upload-placeholder strong{display:block;font-size:.92rem;color:#d0d0e0;margin-bottom:.25rem}
     .upload-placeholder small{font-size:.76rem;color:#555}
-    #previewImg{display:none;width:100%;max-height:340px;object-fit:contain;border-radius:10px}
+    #previewImg{display:none;width:100%;max-height:300px;object-fit:contain;border-radius:10px}
+    #previewVid{display:none;width:100%;max-height:300px;border-radius:10px;background:#000}
     #dropArea.has-img #previewImg{display:block}
+    #dropArea.has-img #previewVid{display:block}
     #dropArea.has-img .upload-placeholder{display:none}
     .preview-hint{display:none;position:absolute;bottom:8px;right:8px;
       background:rgba(0,0,0,.7);color:#aaa;font-size:.68rem;padding:3px 8px;border-radius:6px}
@@ -58,6 +60,9 @@
       border:1px solid #2a2a3a;border-radius:10px;font-size:.88rem;cursor:pointer;
       text-align:center;transition:background .15s,border-color .15s;user-select:none}
     .btn-pick:hover{background:#22223a;border-color:#7c6af7;color:#fff}
+    /* Video warning box */
+    #vidWarn{display:none;margin-top:.75rem;background:#1a1428;border:1px solid #4a3a6a;
+      border-radius:10px;padding:.65rem 1rem;font-size:.78rem;color:#c0a8ff;line-height:1.6}
     #fileRow{display:none;align-items:center;gap:10px;background:#1c1c28;
       border:1px solid #2a2a3a;border-radius:10px;padding:.6rem 1rem;margin-top:.85rem}
     #fileRow .name{flex:1;font-size:.82rem;color:#d0d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -76,12 +81,15 @@
       padding:.7rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.6}
     .pills{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.1rem}
     .pill{font-size:.67rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;color:#444;background:#0d0d14}
-    /* Result — single canvas, centred */
+    /* Result */
     #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
       background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem;text-align:center}
     #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem}
     #outCanvas{max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
+    /* live preview canvas while video is processing */
+    #liveCanvas{display:none;max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
+      background:#000;margin-bottom:.5rem}
     #dlBtn{display:inline-block;margin-top:.85rem;padding:.58rem 1.8rem;
       background:#2d9e6b;color:#fff;border:none;border-radius:8px;
       font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s}
@@ -97,7 +105,7 @@
   <h1>BG <span>Remover</span></h1>
 </div>
 <p class="sub">AI background removal — free, no sign-up, runs in your browser</p>
-<span class="badge">&#10003; Free &nbsp; &#10003; No sign-up &nbsp; &#10003; AI-powered &nbsp; &#10003; Images only</span>
+<span class="badge">&#10003; Free &nbsp; &#10003; No sign-up &nbsp; &#10003; AI-powered &nbsp; &#10003; Images &amp; Video</span>
 
 <div class="card">
   <div class="model-bar" id="modelBar">
@@ -107,20 +115,27 @@
     <button class="btn-retry" id="btnRetry">&#8635; Try again</button>
   </div>
 
-  <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp">
+  <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp,video/mp4,video/webm,video/quicktime,video/*">
 
   <div id="dropArea">
     <div class="upload-placeholder">
       <span class="icon">&#128247;</span>
-      <strong>Drop image here</strong>
-      <small>PNG &bull; JPG &bull; WEBP &bull; BMP</small>
+      <strong>Drop image or video here</strong>
+      <small>Images: PNG JPG WEBP &bull; Video: MP4 WEBM MOV</small>
     </div>
     <img id="previewImg" alt="preview">
+    <video id="previewVid" muted playsinline loop></video>
     <span class="preview-hint">click to change</span>
   </div>
 
+  <div id="vidWarn">
+    &#9889; <strong>Video mode:</strong> frames are processed one-by-one in your browser.
+    Short clips work well — long or high-res videos will be slow.
+    Output is <strong>WebM</strong> (transparent alpha, no audio).
+  </div>
+
   <div class="or"><hr><span>or</span><hr></div>
-  <label class="btn-pick" for="pick">&#128193; Choose image file</label>
+  <label class="btn-pick" for="pick">&#128193; Choose image or video file</label>
 
   <div id="fileRow">
     <span style="font-size:18px">&#128444;</span>
@@ -139,20 +154,19 @@
     <span class="pill">Self-checking</span>
     <span class="pill">No upload</span>
     <span class="pill">100% private</span>
-    <span class="pill">Images only</span>
   </div>
 </div>
 
 <div id="resultBox">
   <div id="resultLabel">&#9989; Background removed!</div>
+  <canvas id="liveCanvas"></canvas>
   <canvas id="outCanvas"></canvas><br>
-  <button id="dlBtn" type="button">&#8659; Download PNG</button>
+  <button id="dlBtn" type="button">&#8659; Download</button>
 </div>
 
 <footer>
-  AI runs entirely in your browser &mdash; images never leave your device &bull;
-  Powered by <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank">BRIA RMBG-1.4</a> &bull;
-  Images only &mdash; video not supported
+  AI runs entirely in your browser &mdash; files never leave your device &bull;
+  Powered by <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank">BRIA RMBG-1.4</a>
 </footer>
 
 <script type="module">
@@ -163,14 +177,15 @@ env.allowLocalModels=false; env.backends.onnx.wasm.proxy=false; env.backends.onn
 
 const $=id=>document.getElementById(id);
 const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSub'),btnRetry=$('btnRetry'),
-      pick=$('pick'),dropArea=$('dropArea'),previewImg=$('previewImg'),
-      fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
+      pick=$('pick'),dropArea=$('dropArea'),previewImg=$('previewImg'),previewVid=$('previewVid'),
+      vidWarn=$('vidWarn'),fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
       clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
       statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),
-      outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
+      liveCanvas=$('liveCanvas'),outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
 
-let aiModel=null,aiProc=null,cf=null,attempt=0;
+let aiModel=null,aiProc=null,cf=null,isVideo=false,attempt=0;
 
+// ── Model loading ─────────────────────────────────────────────────────────────
 async function loadModel(){
   attempt++;aiModel=aiProc=null;btnRetry.style.display='none';
   mbBar.style.width='0%';mbBar.className='mb-bar';modelBar.className='model-bar';mbLabel.className='mb-label wait';
@@ -184,15 +199,18 @@ async function loadModel(){
     if(attempt>1)await new Promise(r=>setTimeout(r,1500));
     aiModel=await AutoModel.from_pretrained('briaai/RMBG-1.4',{config:{model_type:'custom'},progress_callback:onProg});
     aiProc=await AutoProcessor.from_pretrained('briaai/RMBG-1.4',{config:{do_normalize:true,do_pad:false,do_rescale:true,do_resize:true,image_mean:[0.5,0.5,0.5],image_std:[1.0,1.0,1.0],resample:2,rescale_factor:0.00392156862745098,size:{width:1024,height:1024}}});
-    modelBar.className='model-bar ready';mbLabel.className='mb-label ok';mbLabel.textContent='✅ AI ready — drop an image to get started!';
+    modelBar.className='model-bar ready';mbLabel.className='mb-label ok';mbLabel.textContent='✅ AI ready — drop an image or video!';
     mbBar.style.width='100%';mbBar.className='mb-bar ok';mbSub.textContent=attempt===1?'Cached — instant on next visit':'Loaded!';
   }catch(err){
-    console.error('Model load failed (attempt '+attempt+'):',err);
-    if(attempt===1){mbLabel.textContent='⏳ Still loading, please wait…';mbSub.textContent='Retrying automatically…';setTimeout(loadModel,2000);}
-    else{modelBar.className='model-bar error';mbLabel.className='mb-label err';mbLabel.textContent='❌ Could not load model.';mbSub.textContent='Check your connection, then click Try again.';btnRetry.style.display='inline-block';}
+    console.error(err);
+    if(attempt===1){mbLabel.textContent='⏳ Still loading…';mbSub.textContent='Retrying…';setTimeout(loadModel,2000);}
+    else{modelBar.className='model-bar error';mbLabel.className='mb-label err';mbLabel.textContent='❌ Could not load model.';mbSub.textContent='Check connection, then click Try again.';btnRetry.style.display='inline-block';}
   }
 }
 btnRetry.onclick=loadModel;loadModel();
+
+// ── File handling ─────────────────────────────────────────────────────────────
+const VIDEO_TYPES=/^video\//i;
 
 pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);});
 dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
@@ -202,26 +220,200 @@ dropArea.addEventListener('click',()=>{if(dropArea.classList.contains('has-img')
 
 function setFile(f){
   cf=f;
+  isVideo=VIDEO_TYPES.test(f.type)||(f.name.match(/\.(mp4|webm|mov|avi|mkv)$/i)!==null);
   fileName.textContent=f.name;
   fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
   fileRow.style.display='flex';
   goBtn.style.display='block';
+  goBtn.textContent=isVideo?'🎬 Remove Video Background':'✨ Remove Background';
   resultBox.style.display='none';
   errMsg.style.display='none';
   statusMsg.textContent='';
   progBar.style.width='0%';
   progWrap.style.display='none';
+  vidWarn.style.display=isVideo?'block':'none';
+
+  // Clear old previews
+  previewImg.style.display='none';
+  previewVid.style.display='none';
+  previewImg.src='';
+  previewVid.src='';
+
   const url=URL.createObjectURL(f);
-  previewImg.onload=()=>URL.revokeObjectURL(url);
-  previewImg.src=url;
+  if(isVideo){
+    previewVid.src=url;
+    previewVid.style.display='block';
+    previewVid.play().catch(()=>{});
+  } else {
+    previewImg.onload=()=>URL.revokeObjectURL(url);
+    previewImg.src=url;
+    previewImg.style.display='block';
+  }
   dropArea.classList.add('has-img');
 }
 
 clearBtn.addEventListener('click',()=>{
-  cf=null;pick.value='';
+  cf=null;pick.value='';isVideo=false;
   fileRow.style.display='none';goBtn.style.display='none';
   resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';
-  previewImg.src='';dropArea.classList.remove('has-img');
+  previewImg.src='';previewVid.src='';
+  previewImg.style.display='none';previewVid.style.display='none';
+  vidWarn.style.display='none';
+  dropArea.classList.remove('has-img');
+});
+
+// ── Core AI: process one canvas frame → RGBA ImageData ────────────────────────
+async function processFrame(srcCanvas){
+  const W=srcCanvas.width, H=srcCanvas.height;
+  const srcCtx=srcCanvas.getContext('2d');
+  const srcData=srcCtx.getImageData(0,0,W,H).data;
+  const rgb=new Uint8ClampedArray(W*H*3);
+  for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
+  const rawImg=new RawImage(rgb,W,H,3);
+  const{pixel_values}=await aiProc(rawImg);
+  const{output}=await aiModel({input:pixel_values});
+  const maskTensor=output[0].squeeze();const maskFlat=maskTensor.data;
+  const mH=maskTensor.dims[0],mW=maskTensor.dims[1];
+  const mCanvas=document.createElement('canvas');mCanvas.width=mW;mCanvas.height=mH;
+  const mCtx=mCanvas.getContext('2d');const mPx=mCtx.createImageData(mW,mH);
+  for(let i=0;i<maskFlat.length;i++){const v=Math.round(maskFlat[i]*255);mPx.data[i*4]=mPx.data[i*4+1]=mPx.data[i*4+2]=v;mPx.data[i*4+3]=255;}
+  mCtx.putImageData(mPx,0,0);
+  const sCanvas=document.createElement('canvas');sCanvas.width=W;sCanvas.height=H;
+  const sCtx=sCanvas.getContext('2d');sCtx.drawImage(mCanvas,0,0,W,H);
+  const rawMask=sCtx.getImageData(0,0,W,H).data;
+  const maskU8=new Uint8Array(W*H);for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
+  const cleanAlpha=cleanMask(maskU8,srcData,W,H);
+  const outData=new ImageData(W,H);
+  for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
+  return outData;
+}
+
+// ── IMAGE processing ──────────────────────────────────────────────────────────
+async function processImage(){
+  const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=e=>res(e.target.result);r.readAsDataURL(cf);});
+  const img=await new Promise((res,rej)=>{const i=new Image();i.onerror=rej;i.onload=()=>res(i);i.src=dataUrl;});
+  const W=img.naturalWidth,H=img.naturalHeight;
+  const srcCanvas=document.createElement('canvas');srcCanvas.width=W;srcCanvas.height=H;
+  srcCanvas.getContext('2d').drawImage(img,0,0);
+  statusMsg.textContent='Running AI…';progBar.style.width='30%';
+  const outData=await processFrame(srcCanvas);
+  progBar.style.width='96%';statusMsg.textContent='Compositing…';
+  outCanvas.width=W;outCanvas.height=H;
+  outCanvas.style.display='block';
+  liveCanvas.style.display='none';
+  outCanvas.getContext('2d').putImageData(outData,0,0);
+  progBar.style.width='100%';statusMsg.textContent='✅ Done!';
+  dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
+  dlBtn.textContent='⬇ Download PNG';
+  resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+// ── VIDEO processing ──────────────────────────────────────────────────────────
+async function processVideo(){
+  // Load video metadata
+  const vidUrl=URL.createObjectURL(cf);
+  const vid=document.createElement('video');
+  vid.muted=true;vid.playsInline=true;
+  await new Promise((res,rej)=>{vid.onloadedmetadata=res;vid.onerror=rej;vid.src=vidUrl;});
+
+  const VW=vid.videoWidth, VH=vid.videoHeight;
+  const duration=vid.duration;
+  const nominalFps=25; // process at up to 25fps (browser seek is slow anyway)
+
+  // Set up live preview canvas
+  liveCanvas.width=VW;liveCanvas.height=VH;liveCanvas.style.display='block';
+  outCanvas.style.display='none';
+  const liveCtx=liveCanvas.getContext('2d');
+
+  // Set up output canvas stream → MediaRecorder
+  const outC=document.createElement('canvas');outC.width=VW;outC.height=VH;
+  const outCtx2=outC.getContext('2d');
+
+  // Check MediaRecorder support — prefer VP9 with alpha, fall back to VP8
+  const mimeType=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm;codecs=vp8';
+  const stream=outC.captureStream(nominalFps);
+  const recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:8_000_000});
+  const chunks=[];
+  recorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
+  recorder.start(100);
+
+  // Seek + capture loop
+  const frameInterval=1/nominalFps;
+  let t=0, frameCount=0;
+  const srcCanvas=document.createElement('canvas');srcCanvas.width=VW;srcCanvas.height=VH;
+  const sCtx=srcCanvas.getContext('2d');
+
+  while(t<=duration){
+    // Seek video to timestamp
+    await new Promise(res=>{
+      vid.onseeked=res;
+      vid.currentTime=t;
+    });
+
+    // Draw video frame to source canvas
+    sCtx.drawImage(vid,0,0,VW,VH);
+
+    // Run AI
+    statusMsg.textContent=`Processing frame ${frameCount+1} / ~${Math.ceil(duration*nominalFps)}…`;
+    const pct=Math.min(95,Math.round((t/duration)*100));
+    progBar.style.width=pct+'%';
+
+    const outData=await processFrame(srcCanvas);
+
+    // Draw to output canvas (feeds MediaRecorder stream)
+    outCtx2.putImageData(outData,0,0);
+
+    // Also show on live preview
+    liveCtx.putImageData(outData,0,0);
+
+    // Show result box as soon as first frame is ready
+    if(frameCount===0){
+      resultBox.style.display='block';
+      resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
+    }
+
+    frameCount++;
+    t+=frameInterval;
+  }
+
+  // Stop recorder and collect video blob
+  statusMsg.textContent='Assembling video…';progBar.style.width='98%';
+  await new Promise(res=>{recorder.onstop=res;recorder.stop();});
+  URL.revokeObjectURL(vidUrl);
+
+  const blob=new Blob(chunks,{type:mimeType});
+  const stem=cf.name.replace(/\.[^.]+$/,'')||'video';
+
+  progBar.style.width='100%';statusMsg.textContent=`✅ Done! ${frameCount} frames processed.`;
+
+  dlBtn.onclick=()=>{
+    const a=document.createElement('a');
+    a.download=stem+'_nobg.webm';
+    a.href=URL.createObjectURL(blob);
+    a.click();
+  };
+  dlBtn.textContent='⬇ Download WebM';
+  resultBox.style.display='block';
+}
+
+// ── Main button handler ───────────────────────────────────────────────────────
+goBtn.addEventListener('click',async()=>{
+  if(!cf)return;
+  if(!aiModel||!aiProc){errMsg.textContent='⚠ AI model is still loading — please wait.';errMsg.style.display='block';return;}
+  goBtn.disabled=true;goBtn.textContent='Processing…';
+  errMsg.style.display='none';resultBox.style.display='none';
+  progWrap.style.display='block';progBar.style.width='5%';
+  statusMsg.textContent=isVideo?'Preparing video…':'Reading image…';
+  try{
+    if(isVideo) await processVideo();
+    else await processImage();
+  }catch(err){
+    console.error(err);progBar.style.width='0%';statusMsg.textContent='';
+    errMsg.textContent='❌ '+(err.message||'Something went wrong.');errMsg.style.display='block';
+  }finally{
+    goBtn.disabled=false;
+    goBtn.textContent=isVideo?'🎬 Remove Video Background':'✨ Remove Background';
+  }
 });
 
 // ── cleanMask v16 ─────────────────────────────────────────────────────────────
@@ -333,51 +525,6 @@ function cleanMask(maskU8, srcData, W, H) {
   for(let i=0;i<WH;i++){const b=bl[i];out[i]=(b>0.05&&b<0.95)?Math.round(b*255):(bin[i]?255:0);}
   return out;
 }
-
-goBtn.addEventListener('click',async()=>{
-  if(!cf)return;
-  if(!aiModel||!aiProc){errMsg.textContent='⚠ AI model is still loading — please wait.';errMsg.style.display='block';return;}
-  goBtn.disabled=true;goBtn.textContent='Processing…';errMsg.style.display='none';resultBox.style.display='none';
-  progWrap.style.display='block';progBar.style.width='5%';statusMsg.textContent='Reading image…';
-  let pct=5;const tick=setInterval(()=>{if(pct<75){pct+=2;progBar.style.width=pct+'%';}},300);
-  try{
-    const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=e=>res(e.target.result);r.readAsDataURL(cf);});
-    const img=await new Promise((res,rej)=>{const i=new Image();i.onerror=rej;i.onload=()=>res(i);i.src=dataUrl;});
-    const W=img.naturalWidth,H=img.naturalHeight;
-    const srcCanvas=document.createElement('canvas');srcCanvas.width=W;srcCanvas.height=H;
-    const srcCtx=srcCanvas.getContext('2d');srcCtx.drawImage(img,0,0);
-    const srcData=srcCtx.getImageData(0,0,W,H).data;
-    const rgb=new Uint8ClampedArray(W*H*3);
-    for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
-    const rawImg=new RawImage(rgb,W,H,3);
-    statusMsg.textContent='Running AI…';progBar.style.width='30%';
-    const{pixel_values}=await aiProc(rawImg);const{output}=await aiModel({input:pixel_values});
-    clearInterval(tick);progBar.style.width='80%';statusMsg.textContent='Self-checking mask…';
-    const maskTensor=output[0].squeeze();const maskFlat=maskTensor.data;
-    const mH=maskTensor.dims[0],mW=maskTensor.dims[1];
-    const mCanvas=document.createElement('canvas');mCanvas.width=mW;mCanvas.height=mH;
-    const mCtx=mCanvas.getContext('2d');const mPx=mCtx.createImageData(mW,mH);
-    for(let i=0;i<maskFlat.length;i++){const v=Math.round(maskFlat[i]*255);mPx.data[i*4]=mPx.data[i*4+1]=mPx.data[i*4+2]=v;mPx.data[i*4+3]=255;}
-    mCtx.putImageData(mPx,0,0);
-    const sCanvas=document.createElement('canvas');sCanvas.width=W;sCanvas.height=H;
-    const sCtx=sCanvas.getContext('2d');sCtx.drawImage(mCanvas,0,0,W,H);
-    const rawMask=sCtx.getImageData(0,0,W,H).data;
-    const maskU8=new Uint8Array(W*H);for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
-    progBar.style.width='87%';statusMsg.textContent='Iterative cleanup…';
-    const cleanAlpha=cleanMask(maskU8,srcData,W,H);
-    progBar.style.width='96%';statusMsg.textContent='Compositing…';
-    outCanvas.width=W;outCanvas.height=H;
-    const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
-    for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
-    outCtx.putImageData(outData,0,0);
-    progBar.style.width='100%';statusMsg.textContent='✅ Done!';
-    dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
-    resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(err){
-    clearInterval(tick);console.error(err);progBar.style.width='0%';statusMsg.textContent='';
-    errMsg.textContent='❌ '+(err.message||'Something went wrong.');errMsg.style.display='block';
-  }finally{goBtn.disabled=false;goBtn.textContent='✨ Remove Background';}
-});
 </script>
 </body>
 </html>
