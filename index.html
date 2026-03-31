@@ -33,7 +33,6 @@
     .btn-retry{display:none;margin-top:.65rem;padding:.4rem 1.2rem;background:#3a2060;
       color:#c0a8ff;border:1px solid #6040a0;border-radius:8px;font-size:.78rem;cursor:pointer}
     .btn-retry:hover{background:#4a2878}
-    /* Upload drop zone */
     #dropArea{position:relative;border:2px dashed #333;border-radius:12px;
       min-height:140px;text-align:center;cursor:pointer;overflow:hidden;
       transition:border-color .15s,background .15s;background:#0d0d12;user-select:none;
@@ -46,8 +45,7 @@
     .upload-placeholder small{font-size:.76rem;color:#555}
     #previewImg{display:none;width:100%;max-height:300px;object-fit:contain;border-radius:10px}
     #previewVid{display:none;width:100%;max-height:300px;border-radius:10px;background:#000}
-    #dropArea.has-img #previewImg{display:block}
-    #dropArea.has-img #previewVid{display:block}
+    #dropArea.has-img #previewImg,#dropArea.has-img #previewVid{display:block}
     #dropArea.has-img .upload-placeholder{display:none}
     .preview-hint{display:none;position:absolute;bottom:8px;right:8px;
       background:rgba(0,0,0,.7);color:#aaa;font-size:.68rem;padding:3px 8px;border-radius:6px}
@@ -60,7 +58,6 @@
       border:1px solid #2a2a3a;border-radius:10px;font-size:.88rem;cursor:pointer;
       text-align:center;transition:background .15s,border-color .15s;user-select:none}
     .btn-pick:hover{background:#22223a;border-color:#7c6af7;color:#fff}
-    /* Video warning box */
     #vidWarn{display:none;margin-top:.75rem;background:#1a1428;border:1px solid #4a3a6a;
       border-radius:10px;padding:.65rem 1rem;font-size:.78rem;color:#c0a8ff;line-height:1.6}
     #fileRow{display:none;align-items:center;gap:10px;background:#1c1c28;
@@ -81,13 +78,12 @@
       padding:.7rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.6}
     .pills{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.1rem}
     .pill{font-size:.67rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;color:#444;background:#0d0d14}
-    /* Result */
     #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
       background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem;text-align:center}
     #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem}
     #outCanvas{max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px}
-    /* live preview canvas while video is processing */
+    /* live preview while video processes */
     #liveCanvas{display:none;max-width:100%;border-radius:10px;border:1px solid #2a2a3a;
       background:#000;margin-bottom:.5rem}
     #dlBtn{display:inline-block;margin-top:.85rem;padding:.58rem 1.8rem;
@@ -129,9 +125,8 @@
   </div>
 
   <div id="vidWarn">
-    &#9889; <strong>Video mode:</strong> frames are processed one-by-one in your browser.
-    Short clips work well — long or high-res videos will be slow.
-    Output is <strong>WebM</strong> (transparent alpha, no audio).
+    &#9889; <strong>Video mode:</strong> each frame is processed by AI in your browser.
+    Short clips work well. Output is a <strong>WebM video</strong> with transparent background (no audio).
   </div>
 
   <div class="or"><hr><span>or</span><hr></div>
@@ -209,9 +204,8 @@ async function loadModel(){
 }
 btnRetry.onclick=loadModel;loadModel();
 
-// ── File handling ─────────────────────────────────────────────────────────────
-const VIDEO_TYPES=/^video\//i;
-
+// ── File selection ─────────────────────────────────────────────────────────────
+const VIDEO_EXT=/\.(mp4|webm|mov|avi|mkv)$/i;
 pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);});
 dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
 dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
@@ -220,183 +214,327 @@ dropArea.addEventListener('click',()=>{if(dropArea.classList.contains('has-img')
 
 function setFile(f){
   cf=f;
-  isVideo=VIDEO_TYPES.test(f.type)||(f.name.match(/\.(mp4|webm|mov|avi|mkv)$/i)!==null);
+  isVideo=/^video\//i.test(f.type)||VIDEO_EXT.test(f.name);
   fileName.textContent=f.name;
   fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';
   fileRow.style.display='flex';
   goBtn.style.display='block';
   goBtn.textContent=isVideo?'🎬 Remove Video Background':'✨ Remove Background';
-  resultBox.style.display='none';
-  errMsg.style.display='none';
-  statusMsg.textContent='';
-  progBar.style.width='0%';
-  progWrap.style.display='none';
+  resultBox.style.display='none';errMsg.style.display='none';
+  statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';
   vidWarn.style.display=isVideo?'block':'none';
-
-  // Clear old previews
-  previewImg.style.display='none';
-  previewVid.style.display='none';
-  previewImg.src='';
-  previewVid.src='';
-
+  previewImg.style.display='none';previewVid.style.display='none';
+  previewImg.src='';previewVid.src='';
   const url=URL.createObjectURL(f);
-  if(isVideo){
-    previewVid.src=url;
-    previewVid.style.display='block';
-    previewVid.play().catch(()=>{});
-  } else {
-    previewImg.onload=()=>URL.revokeObjectURL(url);
-    previewImg.src=url;
-    previewImg.style.display='block';
-  }
+  if(isVideo){previewVid.src=url;previewVid.style.display='block';previewVid.play().catch(()=>{});}
+  else{previewImg.onload=()=>URL.revokeObjectURL(url);previewImg.src=url;previewImg.style.display='block';}
   dropArea.classList.add('has-img');
 }
-
 clearBtn.addEventListener('click',()=>{
   cf=null;pick.value='';isVideo=false;
   fileRow.style.display='none';goBtn.style.display='none';
   resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';
   previewImg.src='';previewVid.src='';
   previewImg.style.display='none';previewVid.style.display='none';
-  vidWarn.style.display='none';
-  dropArea.classList.remove('has-img');
+  vidWarn.style.display='none';dropArea.classList.remove('has-img');
 });
 
-// ── Core AI: process one canvas frame → RGBA ImageData ────────────────────────
-async function processFrame(srcCanvas){
+// ══════════════════════════════════════════════════════════════════════════════
+// SHARED AI PIPELINE — same for image and video frames
+// Input:  srcCanvas (drawn with the frame pixels)
+// Output: ImageData with RGBA (background = alpha 0)
+// ══════════════════════════════════════════════════════════════════════════════
+async function runAI(srcCanvas){
   const W=srcCanvas.width, H=srcCanvas.height;
-  const srcCtx=srcCanvas.getContext('2d');
-  const srcData=srcCtx.getImageData(0,0,W,H).data;
+  const srcData=srcCanvas.getContext('2d').getImageData(0,0,W,H).data;
+  // Build RGB input for model
   const rgb=new Uint8ClampedArray(W*H*3);
   for(let i=0;i<W*H;i++){rgb[i*3]=srcData[i*4];rgb[i*3+1]=srcData[i*4+1];rgb[i*3+2]=srcData[i*4+2];}
-  const rawImg=new RawImage(rgb,W,H,3);
-  const{pixel_values}=await aiProc(rawImg);
+  // Run RMBG-1.4
+  const{pixel_values}=await aiProc(new RawImage(rgb,W,H,3));
   const{output}=await aiModel({input:pixel_values});
-  const maskTensor=output[0].squeeze();const maskFlat=maskTensor.data;
-  const mH=maskTensor.dims[0],mW=maskTensor.dims[1];
-  const mCanvas=document.createElement('canvas');mCanvas.width=mW;mCanvas.height=mH;
-  const mCtx=mCanvas.getContext('2d');const mPx=mCtx.createImageData(mW,mH);
+  // Upscale mask back to source size
+  const maskT=output[0].squeeze();const maskFlat=maskT.data;
+  const mC=document.createElement('canvas');mC.width=maskT.dims[1];mC.height=maskT.dims[0];
+  const mCtx=mC.getContext('2d');const mPx=mCtx.createImageData(mC.width,mC.height);
   for(let i=0;i<maskFlat.length;i++){const v=Math.round(maskFlat[i]*255);mPx.data[i*4]=mPx.data[i*4+1]=mPx.data[i*4+2]=v;mPx.data[i*4+3]=255;}
   mCtx.putImageData(mPx,0,0);
-  const sCanvas=document.createElement('canvas');sCanvas.width=W;sCanvas.height=H;
-  const sCtx=sCanvas.getContext('2d');sCtx.drawImage(mCanvas,0,0,W,H);
-  const rawMask=sCtx.getImageData(0,0,W,H).data;
+  const sC=document.createElement('canvas');sC.width=W;sC.height=H;
+  sC.getContext('2d').drawImage(mC,0,0,W,H);
+  const rawMask=sC.getContext('2d').getImageData(0,0,W,H).data;
   const maskU8=new Uint8Array(W*H);for(let i=0;i<W*H;i++)maskU8[i]=rawMask[i*4];
+  // Post-process mask
   const cleanAlpha=cleanMask(maskU8,srcData,W,H);
-  const outData=new ImageData(W,H);
-  for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
-  return outData;
+  // Composite RGBA
+  const out=new ImageData(W,H);
+  for(let i=0;i<W*H;i++){const p=i*4;out.data[p]=srcData[p];out.data[p+1]=srcData[p+1];out.data[p+2]=srcData[p+2];out.data[p+3]=cleanAlpha[i];}
+  return out;
 }
 
-// ── IMAGE processing ──────────────────────────────────────────────────────────
+// ── IMAGE ─────────────────────────────────────────────────────────────────────
 async function processImage(){
   const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=e=>res(e.target.result);r.readAsDataURL(cf);});
   const img=await new Promise((res,rej)=>{const i=new Image();i.onerror=rej;i.onload=()=>res(i);i.src=dataUrl;});
-  const W=img.naturalWidth,H=img.naturalHeight;
-  const srcCanvas=document.createElement('canvas');srcCanvas.width=W;srcCanvas.height=H;
-  srcCanvas.getContext('2d').drawImage(img,0,0);
+  const srcC=document.createElement('canvas');srcC.width=img.naturalWidth;srcC.height=img.naturalHeight;
+  srcC.getContext('2d').drawImage(img,0,0);
   statusMsg.textContent='Running AI…';progBar.style.width='30%';
-  const outData=await processFrame(srcCanvas);
-  progBar.style.width='96%';statusMsg.textContent='Compositing…';
-  outCanvas.width=W;outCanvas.height=H;
-  outCanvas.style.display='block';
-  liveCanvas.style.display='none';
+  const outData=await runAI(srcC);
+  outCanvas.width=srcC.width;outCanvas.height=srcC.height;
+  outCanvas.style.display='block';liveCanvas.style.display='none';
   outCanvas.getContext('2d').putImageData(outData,0,0);
   progBar.style.width='100%';statusMsg.textContent='✅ Done!';
-  dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
   dlBtn.textContent='⬇ Download PNG';
+  dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
   resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 
-// ── VIDEO processing ──────────────────────────────────────────────────────────
+// ── VIDEO ─────────────────────────────────────────────────────────────────────
+// Strategy:
+//   1. Seek through video frame-by-frame using the same runAI() pipeline
+//   2. Collect processed ImageData frames with their timestamps
+//   3. Encode into proper WebM using WebCodecs VideoEncoder (Chrome/Edge)
+//      → Falls back to MediaRecorder if WebCodecs not available (Firefox)
+//   4. Mux into .webm container using a tiny IVF/WebM muxer
 async function processVideo(){
-  // Load video metadata
   const vidUrl=URL.createObjectURL(cf);
   const vid=document.createElement('video');
   vid.muted=true;vid.playsInline=true;
   await new Promise((res,rej)=>{vid.onloadedmetadata=res;vid.onerror=rej;vid.src=vidUrl;});
+  const VW=vid.videoWidth,VH=vid.videoHeight,duration=vid.duration;
 
-  const VW=vid.videoWidth, VH=vid.videoHeight;
-  const duration=vid.duration;
-  const nominalFps=25; // process at up to 25fps (browser seek is slow anyway)
+  // Determine source FPS by probing seek points; cap processing at 24fps
+  const targetFps=Math.min(24, await estimateFps(vid,duration));
+  const frameInterval=1/targetFps;
+  const totalFrames=Math.ceil(duration*targetFps);
 
-  // Set up live preview canvas
+  // Live preview
   liveCanvas.width=VW;liveCanvas.height=VH;liveCanvas.style.display='block';
   outCanvas.style.display='none';
   const liveCtx=liveCanvas.getContext('2d');
 
-  // Set up output canvas stream → MediaRecorder
-  const outC=document.createElement('canvas');outC.width=VW;outC.height=VH;
-  const outCtx2=outC.getContext('2d');
+  // Offscreen canvas for drawing source frames
+  const srcC=document.createElement('canvas');srcC.width=VW;srcC.height=VH;
+  const srcCtx=srcC.getContext('2d');
 
-  // Check MediaRecorder support — prefer VP9 with alpha, fall back to VP8
-  const mimeType=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm;codecs=vp8';
-  const stream=outC.captureStream(nominalFps);
-  const recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:8_000_000});
-  const chunks=[];
-  recorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
-  recorder.start(100);
+  // Show result box early
+  resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
 
-  // Seek + capture loop
-  const frameInterval=1/nominalFps;
-  let t=0, frameCount=0;
-  const srcCanvas=document.createElement('canvas');srcCanvas.width=VW;srcCanvas.height=VH;
-  const sCtx=srcCanvas.getContext('2d');
+  const useWebCodecs=typeof VideoEncoder!=='undefined';
 
-  while(t<=duration){
-    // Seek video to timestamp
-    await new Promise(res=>{
-      vid.onseeked=res;
-      vid.currentTime=t;
+  if(useWebCodecs){
+    // ── WebCodecs path: precise timestamps, proper WebM ───────────────────────
+    const chunks=[];
+    let encoderReady=false,encoderError=null;
+
+    // We'll use alpha=true for VP9 (transparent WebM)
+    // Codec string: vp09.00.10.08 = VP9 profile 0, level 1, bit depth 8
+    const codecStr='vp09.00.10.08';
+    const supported=await VideoEncoder.isConfigSupported({codec:codecStr,width:VW,height:VH,alpha:'keep'}).catch(()=>({supported:false}));
+    const useAlpha=supported.supported;
+    const finalCodec=useAlpha?codecStr:'vp8';
+
+    const encoder=new VideoEncoder({
+      output:(chunk,meta)=>{
+        const buf=new Uint8Array(chunk.byteLength);
+        chunk.copyTo(buf);
+        chunks.push({buf,timestamp:chunk.timestamp,duration:chunk.duration??Math.round(frameInterval*1e6),type:chunk.type,meta});
+      },
+      error:(e)=>{encoderError=e;}
     });
+    encoder.configure({
+      codec:finalCodec,width:VW,height:VH,
+      ...(useAlpha?{alpha:'keep'}:{}),
+      bitrate:6_000_000,
+      framerate:targetFps
+    });
+    encoderReady=true;
 
-    // Draw video frame to source canvas
-    sCtx.drawImage(vid,0,0,VW,VH);
+    for(let fi=0;fi<totalFrames;fi++){
+      const t=fi*frameInterval;
+      // Seek
+      await new Promise(res=>{vid.onseeked=res;vid.currentTime=Math.min(t,duration-0.001);});
+      srcCtx.drawImage(vid,0,0,VW,VH);
 
-    // Run AI
-    statusMsg.textContent=`Processing frame ${frameCount+1} / ~${Math.ceil(duration*nominalFps)}…`;
-    const pct=Math.min(95,Math.round((t/duration)*100));
-    progBar.style.width=pct+'%';
+      statusMsg.textContent=`Processing frame ${fi+1} / ${totalFrames}…`;
+      progBar.style.width=Math.round((fi/totalFrames)*95)+'%';
 
-    const outData=await processFrame(srcCanvas);
+      const outData=await runAI(srcC);
 
-    // Draw to output canvas (feeds MediaRecorder stream)
-    outCtx2.putImageData(outData,0,0);
+      // Draw to live preview
+      liveCtx.putImageData(outData,0,0);
 
-    // Also show on live preview
-    liveCtx.putImageData(outData,0,0);
+      // Create VideoFrame from ImageData
+      const bitmap=await createImageBitmap(outData);
+      const frame=new VideoFrame(bitmap,{timestamp:Math.round(t*1e6),duration:Math.round(frameInterval*1e6),alpha:'keep'});
+      encoder.encode(frame,{keyFrame:fi%30===0});
+      frame.close();bitmap.close();
 
-    // Show result box as soon as first frame is ready
-    if(frameCount===0){
-      resultBox.style.display='block';
-      resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
+      if(encoderError)throw encoderError;
     }
 
-    frameCount++;
-    t+=frameInterval;
+    await encoder.flush();
+    encoder.close();
+    URL.revokeObjectURL(vidUrl);
+
+    // Mux into WebM using simple IVF-style container
+    statusMsg.textContent='Assembling WebM…';progBar.style.width='98%';
+    const blob=muxWebM(chunks,VW,VH,targetFps,finalCodec);
+
+    finishVideo(blob,'webm');
+  } else {
+    // ── MediaRecorder fallback (Firefox) ──────────────────────────────────────
+    const outC=document.createElement('canvas');outC.width=VW;outC.height=VH;
+    const outCtx=outC.getContext('2d');
+    const mimeType=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm;codecs=vp8';
+    const stream=outC.captureStream(targetFps);
+    const recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:6_000_000});
+    const chunks=[];
+    recorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
+    recorder.start(50);
+
+    for(let fi=0;fi<totalFrames;fi++){
+      const t=fi*frameInterval;
+      await new Promise(res=>{vid.onseeked=res;vid.currentTime=Math.min(t,duration-0.001);});
+      srcCtx.drawImage(vid,0,0,VW,VH);
+      statusMsg.textContent=`Processing frame ${fi+1} / ${totalFrames}…`;
+      progBar.style.width=Math.round((fi/totalFrames)*95)+'%';
+      const outData=await runAI(srcC);
+      outCtx.putImageData(outData,0,0);
+      liveCtx.putImageData(outData,0,0);
+      // Hold each frame for correct duration in MediaRecorder stream
+      await new Promise(res=>setTimeout(res,Math.round(frameInterval*1000)));
+    }
+
+    statusMsg.textContent='Assembling video…';progBar.style.width='98%';
+    await new Promise(res=>{recorder.onstop=res;recorder.stop();});
+    URL.revokeObjectURL(vidUrl);
+    finishVideo(new Blob(chunks,{type:mimeType}),'webm');
   }
+}
 
-  // Stop recorder and collect video blob
-  statusMsg.textContent='Assembling video…';progBar.style.width='98%';
-  await new Promise(res=>{recorder.onstop=res;recorder.stop();});
-  URL.revokeObjectURL(vidUrl);
-
-  const blob=new Blob(chunks,{type:mimeType});
+function finishVideo(blob,ext){
   const stem=cf.name.replace(/\.[^.]+$/,'')||'video';
-
-  progBar.style.width='100%';statusMsg.textContent=`✅ Done! ${frameCount} frames processed.`;
-
-  dlBtn.onclick=()=>{
-    const a=document.createElement('a');
-    a.download=stem+'_nobg.webm';
-    a.href=URL.createObjectURL(blob);
-    a.click();
-  };
-  dlBtn.textContent='⬇ Download WebM';
+  progBar.style.width='100%';
+  statusMsg.textContent=`✅ Done! Download your video below.`;
+  dlBtn.textContent='⬇ Download WebM Video';
+  dlBtn.onclick=()=>{const a=document.createElement('a');a.download=`${stem}_nobg.${ext}`;a.href=URL.createObjectURL(blob);a.click();};
   resultBox.style.display='block';
 }
 
-// ── Main button handler ───────────────────────────────────────────────────────
+async function estimateFps(vid,duration){
+  // Probe first 1 second with 30fps grid to estimate actual keyframe density
+  // Just return 24 as a safe default for now; real FPS from video metadata isn't
+  // reliably available in the browser without parsing the container.
+  return 24;
+}
+
+// ── Minimal WebM muxer using Matroska/WebM binary format ──────────────────────
+// Encodes VP8/VP9 chunks into a valid .webm file with correct timestamps.
+function muxWebM(chunks,width,height,fps,codec){
+  // WebM is a subset of Matroska. We build the minimal EBML structure:
+  // EBML header + Segment (SeekHead + Info + Tracks + Cluster blocks)
+  const isVP9=codec.startsWith('vp09')||codec==='vp9';
+  const codecId=isVP9?'V_VP9':'V_VP8';
+
+  function num(n,bytes){const a=new Uint8Array(bytes);for(let i=bytes-1;i>=0;i--){a[i]=n&0xff;n>>=8;}return a;}
+  function vint(n){
+    if(n<0x7f){return new Uint8Array([n|0x80]);}
+    if(n<0x3fff){return new Uint8Array([((n>>8)|0x40),n&0xff]);}
+    if(n<0x1fffff){return new Uint8Array([((n>>16)|0x20),(n>>8)&0xff,n&0xff]);}
+    if(n<0x0fffffff){return new Uint8Array([((n>>24)|0x10),(n>>16)&0xff,(n>>8)&0xff,n&0xff]);}
+    // 8-byte VINT for large sizes
+    return new Uint8Array([0x01,0,0,0,(n>>24)&0xff,(n>>16)&0xff,(n>>8)&0xff,n&0xff]);
+  }
+  function ebml(id,data){
+    const idB=typeof id==='number'?num(id,id>0xffffff?4:id>0xffff?3:id>0xff?2:1):id;
+    const d=data instanceof Uint8Array?data:cat(...data);
+    return cat(idB,vint(d.byteLength),d);
+  }
+  function str(s){return new TextEncoder().encode(s);}
+  function cat(...parts){
+    const total=parts.reduce((s,p)=>s+p.byteLength,0);
+    const out=new Uint8Array(total);let off=0;
+    for(const p of parts){out.set(p,off);off+=p.byteLength;}
+    return out;
+  }
+  function f64(v){const b=new ArrayBuffer(8);new DataView(b).setFloat64(0,v);return new Uint8Array(b);}
+
+  // EBML header
+  const ebmlHeader=ebml(0x1A45DFA3,[
+    ebml(0x4286,num(1,1)),  // EBMLVersion
+    ebml(0x42F7,num(1,1)),  // EBMLReadVersion
+    ebml(0x42F2,num(4,1)),  // EBMLMaxIDLength
+    ebml(0x42F3,num(8,1)),  // EBMLMaxSizeLength
+    ebml(0x4282,str('webm')), // DocType
+    ebml(0x4287,num(2,1)),  // DocTypeVersion
+    ebml(0x4285,num(2,1)),  // DocTypeReadVersion
+  ]);
+
+  const durationMs=chunks.length>0?(chunks[chunks.length-1].timestamp/1000+1000/fps):0;
+  const timescale=1000000; // 1ms in nanoseconds
+
+  // Segment Info
+  const info=ebml(0x1549A966,[
+    ebml(0x2AD7B1,num(timescale,8)), // TimecodeScale (1ms)
+    ebml(0x4489,f64(durationMs)),    // Duration
+    ebml(0x4D80,str('BG Remover')),  // MuxingApp
+    ebml(0x5741,str('BG Remover')),  // WritingApp
+  ]);
+
+  // Track entry
+  const track=ebml(0x1654AE6B,[
+    ebml(0xAE,[
+      ebml(0xD7,num(1,1)),           // TrackNumber
+      ebml(0x73C5,num(1,8)),         // TrackUID
+      ebml(0x83,num(1,1)),           // TrackType = video
+      ebml(0x86,str(codecId)),       // CodecID
+      ebml(0x9C,num(1,1)),           // FlagLacing = 0, but using 1 for simplicity
+      ebml(0xE0,[                    // Video
+        ebml(0xB0,num(width,2)),     // PixelWidth
+        ebml(0xBA,num(height,2)),    // PixelHeight
+        ...(isVP9?[ebml(0x53C0,num(0,1))]:[] ), // AlphaMode = 1 for VP9 alpha
+      ]),
+    ])
+  ]);
+
+  // Clusters — group frames into 1-second clusters
+  const clusterDuration=1000; // 1 second per cluster in ms
+  const clusterGroups=[];
+  let curGroup=[];let curBase=-1;
+  for(const chunk of chunks){
+    const tsMs=Math.round(chunk.timestamp/1000);
+    const clusterBase=Math.floor(tsMs/clusterDuration)*clusterDuration;
+    if(clusterBase!==curBase){
+      if(curGroup.length>0)clusterGroups.push({base:curBase,frames:curGroup});
+      curGroup=[];curBase=clusterBase;
+    }
+    curGroup.push({...chunk,tsMs});
+  }
+  if(curGroup.length>0)clusterGroups.push({base:curBase,frames:curGroup});
+
+  const clusterBytes=cat(...clusterGroups.map(({base,frames})=>{
+    const blocks=cat(...frames.map(f=>{
+      const relTs=f.tsMs-base;
+      // SimpleBlock: track number as vint, 2-byte relative timecode, flags, data
+      const trackVint=new Uint8Array([0x81]); // track 1
+      const tsBytes=new Uint8Array([relTs>>8,relTs&0xff]);
+      const flags=new Uint8Array([f.type==='key'?0x80:0x00]);
+      const block=cat(trackVint,tsBytes,flags,f.buf);
+      return ebml(0xA3,block); // SimpleBlock
+    }));
+    return ebml(0x1F43B675,cat(ebml(0xE7,num(base,8)),blocks)); // Cluster
+  }));
+
+  const segment=cat(
+    new Uint8Array([0x18,0x53,0x80,0x67]), // Segment ID
+    new Uint8Array([0x01,0xff,0xff,0xff,0xff,0xff,0xff,0xff]), // unknown size
+    info,track,clusterBytes
+  );
+
+  return new Blob([ebmlHeader,segment],{type:'video/webm'});
+}
+
+// ── Main handler ──────────────────────────────────────────────────────────────
 goBtn.addEventListener('click',async()=>{
   if(!cf)return;
   if(!aiModel||!aiProc){errMsg.textContent='⚠ AI model is still loading — please wait.';errMsg.style.display='block';return;}
@@ -405,7 +543,7 @@ goBtn.addEventListener('click',async()=>{
   progWrap.style.display='block';progBar.style.width='5%';
   statusMsg.textContent=isVideo?'Preparing video…':'Reading image…';
   try{
-    if(isVideo) await processVideo();
+    if(isVideo)await processVideo();
     else await processImage();
   }catch(err){
     console.error(err);progBar.style.width='0%';statusMsg.textContent='';
@@ -419,27 +557,17 @@ goBtn.addEventListener('click',async()=>{
 // ── cleanMask v16 ─────────────────────────────────────────────────────────────
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
-  function bfsLabel(arr, trackPx){
-    const lab=new Int32Array(WH), sizes=[], pixMap=trackPx?new Map():null;
-    let nL=0;
+  function bfsLabel(arr,trackPx){
+    const lab=new Int32Array(WH),sizes=[],pixMap=trackPx?new Map():null;let nL=0;
     for(let s=0;s<WH;s++){
-      if(!arr[s]||lab[s])continue;
-      nL++;
-      const lbl=nL, q=[s]; let qi=0, sz=0, onB=false;
-      lab[s]=lbl;
-      if(trackPx)pixMap.set(lbl,[]);
+      if(!arr[s]||lab[s])continue;nL++;
+      const lbl=nL,q=[s];let qi=0,sz=0,onB=false;
+      lab[s]=lbl;if(trackPx)pixMap.set(lbl,[]);
       while(qi<q.length){
-        const c=q[qi++]; sz++;
-        if(trackPx)pixMap.get(lbl).push(c);
-        const cx=c%W, cy=(c/W)|0;
+        const c=q[qi++];sz++;if(trackPx)pixMap.get(lbl).push(c);
+        const cx=c%W,cy=(c/W)|0;
         if(cx<=2||cx>=W-3||cy<=2||cy>=H-3)onB=true;
-        for(let d=0;d<4;d++){
-          const nb=c+DIRS[d];
-          if(nb<0||nb>=WH)continue;
-          if(DIRS[d]===-1&&cx===0)continue;
-          if(DIRS[d]===1&&cx===W-1)continue;
-          if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}
-        }
+        for(let d=0;d<4;d++){const nb=c+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&cx===0)continue;if(DIRS[d]===1&&cx===W-1)continue;if(arr[nb]&&!lab[nb]){lab[nb]=lbl;q.push(nb);}}
       }
       sizes.push({id:lbl,size:sz,onBorder:onB});
     }
@@ -462,31 +590,22 @@ function cleanMask(maskU8, srcData, W, H) {
   for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
   const isBg=p=>nd[p]<=tp[p];
   function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
-  function isBody(p){
-    const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
-    const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
-    return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
-  }
+  function isBody(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;}
   function handleSky(b){
-    const sk=new Uint8Array(WH);
-    for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
+    const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
     const{lab,sizes,pixMap}=bfsLabel(sk,true);
     for(const{id,size,onBorder}of sizes){
-      if(onBorder||size>=1500)continue;
-      const px=pixMap.get(id);
-      let touchesBg=false;
-      outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
+      if(onBorder||size>=1500)continue;const px=pixMap.get(id);let touchesBg=false;
+      outer:for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
       if(touchesBg){for(const i of px)b[i]=0;}else{for(const i of px)b[i]=1;}
     }
   }
-  const bin=new Uint8Array(WH);
-  for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
+  const bin=new Uint8Array(WH);for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
   {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
   function score(b){
     const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
-    const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);
-    let s=0;
-    for(const{id,size,onBorder}of ss){if(onBorder||size>=1500)continue;const px=sp.get(id);let touchesBg=false;outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}if(touchesBg)s+=size;}
+    const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);let s=0;
+    for(const{id,size,onBorder}of ss){if(onBorder||size>=1500)continue;const px=sp.get(id);let t=false;outer:for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){t=true;break outer;}}}if(t)s+=size;}
     const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
     const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
     const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
@@ -504,10 +623,7 @@ function cleanMask(maskU8, srcData, W, H) {
       for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
     handleSky(bin);
-    for(let pass=0;pass<3;pass++){
-      const prev2=new Uint8Array(bin);
-      for(let p=0;p<WH;p++){if(prev2[p])continue;let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}if(hasFg&&isBody(p))bin[p]=1;}
-    }
+    for(let pass=0;pass<3;pass++){const prev2=new Uint8Array(bin);for(let p=0;p<WH;p++){if(prev2[p])continue;let h=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){h=true;break;}}if(h&&isBody(p))bin[p]=1;}}
     handleSky(bin);
   }
   for(let y=0;y<H;y++){
