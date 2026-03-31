@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>BG Remover — AI-powered, free</title>
-  <link rel="icon" type="image/png" href="data:image/png;base64,FAVICON_PLACEHOLDER"/>
+  <link rel="icon" type="image/png" href="favicon.png"/>
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Segoe UI',system-ui,sans-serif;background:#0d0d12;color:#e2e2e8;
@@ -82,7 +82,7 @@
 <body>
 
 <div class="header">
-  <img src="https://raw.githubusercontent.com/HP980322/bg-remover-web/main/logo.png" alt="Coco">
+  <img src="logo.png" alt="Coco" onerror="this.src='https://placehold.co/48x48?text=Logo'">
   <h1>BG <span>Remover</span></h1>
 </div>
 <p class="sub">AI background removal — free, no sign-up, runs in your browser</p>
@@ -183,16 +183,8 @@ dropArea.addEventListener('drop',e=>{e.preventDefault();dropArea.classList.remov
 function setFile(f){cf=f;fileName.textContent=f.name;fileSize.textContent=(f.size/1048576).toFixed(2)+' MB';fileRow.style.display='flex';goBtn.style.display='block';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';progBar.style.width='0%';progWrap.style.display='none';}
 clearBtn.addEventListener('click',()=>{cf=null;pick.value='';fileRow.style.display='none';goBtn.style.display='none';resultBox.style.display='none';errMsg.style.display='none';statusMsg.textContent='';});
 
-// ══════════════════════════════════════════════════════════════════════════════
-// cleanMask — v16 final
-// • Smart sky: edge-touching = remove, enclosed = fill (no dirty holes on cloth)
-// • Warm-ratio body dilation catches dark sleeves (R > G×1.2, R > B×1.2, sat>25)
-// • handleSky() called after closing AND dilation to prevent oscillation
-// • O(n) BFS border detection built into labeller
-// ══════════════════════════════════════════════════════════════════════════════
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
-
   function bfsLabel(arr, trackPx){
     const lab=new Int32Array(WH), sizes=[], pixMap=trackPx?new Map():null;
     let nL=0;
@@ -219,7 +211,6 @@ function cleanMask(maskU8, srcData, W, H) {
     }
     return{lab,sizes,pixMap};
   }
-
   const smp=[];
   for(let x=0;x<W;x+=3){const t=x*4,b=((H-1)*W+x)*4;smp.push([srcData[t],srcData[t+1],srcData[t+2]]);smp.push([srcData[b],srcData[b+1],srcData[b+2]]);}
   for(let y=1;y<H-1;y+=3){const l=y*W*4,r=(y*W+W-1)*4;smp.push([srcData[l],srcData[l+1],srcData[l+2]]);smp.push([srcData[r],srcData[r+1],srcData[r+2]]);}
@@ -236,16 +227,12 @@ function cleanMask(maskU8, srcData, W, H) {
   const nd=new Float32Array(WH),tp=new Float32Array(WH);
   for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
   const isBg=p=>nd[p]<=tp[p];
-
   function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
-
   function isBody(p){
     const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
     const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
     return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
   }
-
-  // Key insight: sky pixels at the MASK EDGE = remove; sky pixels ENCLOSED by fg = fill (they're holes)
   function handleSky(b){
     const sk=new Uint8Array(WH);
     for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
@@ -254,25 +241,14 @@ function cleanMask(maskU8, srcData, W, H) {
       if(onBorder||size>=1500)continue;
       const px=pixMap.get(id);
       let touchesBg=false;
-      outer: for(const p of px){
-        for(let d=0;d<4;d++){
-          const nb=p+DIRS[d];
-          if(nb<0||nb>=WH)continue;
-          if(DIRS[d]===-1&&p%W===0)continue;
-          if(DIRS[d]===1&&nb%W===0)continue;
-          if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}
-        }
-      }
+      outer: for(const p of px){for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}}}
       if(touchesBg){for(const i of px)b[i]=0;}
       else{for(const i of px)b[i]=1;}
     }
   }
-
   const bin=new Uint8Array(WH);
   for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
-
   {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
-
   function score(b){
     const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
     const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);
@@ -286,36 +262,18 @@ function cleanMask(maskU8, srcData, W, H) {
     }
     const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=b[i]?0:1;
     const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
-    const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-    for(const{id,size,onBorder}of bgS){
-      if(onBorder||!size)continue;
-      const px=bgP.get(id);
-      const bf=px.filter(isBg).length/size;
-      if(bf<0.70)s+=size*2;
-    }
+    for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)s+=size*2;}
     return s;
   }
-
   let prev=Infinity;
   for(let iter=0;iter<8;iter++){
-    const sc=score(bin);
-    if(sc===0||sc>=prev)break;
-    prev=sc;
-
+    const sc=score(bin);if(sc===0||sc>=prev)break;prev=sc;
     handleSky(bin);
-
     {
       const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
       const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
-      const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-      for(const{id,size,onBorder}of bgS){
-        if(onBorder||!size)continue;
-        const px=bgP.get(id);
-        const bf=px.filter(isBg).length/size;
-        if(bf<0.70)for(const i of px)bin[i]=1;
-      }
+      for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)for(const i of px)bin[i]=1;}
     }
-
     for(let pass=0;pass<2;pass++){
       const dil=new Uint8Array(bin);
       for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
@@ -324,18 +282,12 @@ function cleanMask(maskU8, srcData, W, H) {
       for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
     handleSky(bin);
-
     for(let pass=0;pass<3;pass++){
       const prev2=new Uint8Array(bin);
-      for(let p=0;p<WH;p++){
-        if(prev2[p])continue;
-        let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}
-        if(hasFg&&isBody(p))bin[p]=1;
-      }
+      for(let p=0;p<WH;p++){if(prev2[p])continue;let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}if(hasFg&&isBody(p))bin[p]=1;}
     }
     handleSky(bin);
   }
-
   for(let y=0;y<H;y++){
     const rb=y*W;let rs=-1;
     const flush=end=>{
@@ -349,9 +301,7 @@ function cleanMask(maskU8, srcData, W, H) {
     for(let x=0;x<W;x++){if(bin[rb+x]){if(rs<0)rs=x;}else{if(rs>=0)flush(x);}}
     if(rs>=0)flush(W);
   }
-
   {const minSz=Math.floor(WH*0.003);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
-
   const alpha=new Float32Array(WH);for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
   for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const ci=y*W+x;bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;}
