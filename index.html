@@ -33,24 +33,23 @@
     .btn-retry{display:none;margin-top:.65rem;padding:.4rem 1.2rem;background:#3a2060;
       color:#c0a8ff;border:1px solid #6040a0;border-radius:8px;font-size:.78rem;cursor:pointer}
     .btn-retry:hover{background:#4a2878}
-    /* Upload area — shows image preview when loaded */
-    .upload-area{position:relative;display:block;border:2px dashed #333;border-radius:12px;
+    /* Upload drop zone */
+    #dropArea{position:relative;border:2px dashed #333;border-radius:12px;
       min-height:140px;text-align:center;cursor:pointer;overflow:hidden;
-      transition:border-color .15s,background .15s;background:#0d0d12;user-select:none}
-    .upload-area:hover,.upload-area.over{border-color:#7c6af7;background:#0e0c1c}
-    .upload-area.has-img{border-color:#3a3a5a;background:#0d0d12;min-height:0}
-    .upload-placeholder{padding:2.5rem 1rem;pointer-events:none}
-    .upload-area .icon{font-size:2rem;display:block;margin-bottom:.6rem}
-    .upload-area strong{display:block;font-size:.92rem;color:#d0d0e0;margin-bottom:.25rem}
-    .upload-area small{font-size:.76rem;color:#555}
-    #previewImg{display:none;width:100%;max-height:340px;object-fit:contain;
-      border-radius:10px;pointer-events:none}
-    .upload-area.has-img #previewImg{display:block}
-    .upload-area.has-img .upload-placeholder{display:none}
-    .preview-badge{display:none;position:absolute;bottom:8px;right:8px;
-      background:rgba(0,0,0,.65);color:#aaa;font-size:.68rem;
-      padding:3px 8px;border-radius:6px;pointer-events:none}
-    .upload-area.has-img .preview-badge{display:block}
+      transition:border-color .15s,background .15s;background:#0d0d12;user-select:none;
+      display:flex;align-items:center;justify-content:center}
+    #dropArea:hover,#dropArea.over{border-color:#7c6af7;background:#0e0c1c}
+    #dropArea.has-img{border-color:#3a3a5a;min-height:0;display:block}
+    .upload-placeholder{padding:2rem 1rem;pointer-events:none}
+    .upload-placeholder .icon{font-size:2rem;display:block;margin-bottom:.6rem}
+    .upload-placeholder strong{display:block;font-size:.92rem;color:#d0d0e0;margin-bottom:.25rem}
+    .upload-placeholder small{font-size:.76rem;color:#555}
+    #previewImg{display:none;width:100%;max-height:340px;object-fit:contain;border-radius:10px}
+    #dropArea.has-img #previewImg{display:block}
+    #dropArea.has-img .upload-placeholder{display:none}
+    .preview-hint{display:none;position:absolute;bottom:8px;right:8px;
+      background:rgba(0,0,0,.7);color:#aaa;font-size:.68rem;padding:3px 8px;border-radius:6px}
+    #dropArea.has-img .preview-hint{display:block}
     #pick{position:absolute;left:-9999px;opacity:0}
     .or{display:flex;align-items:center;gap:8px;margin:.9rem 0}
     .or hr{flex:1;border:none;border-top:1px solid #222}
@@ -77,17 +76,17 @@
       padding:.7rem 1rem;margin-top:.85rem;font-size:.8rem;color:#e08090;line-height:1.6}
     .pills{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:1.1rem}
     .pill{font-size:.67rem;padding:2px 9px;border-radius:999px;border:1px solid #2a2a3a;color:#444;background:#0d0d14}
-    /* Result box — side by side comparison */
+    /* Result — before/after comparison */
     #resultBox{display:none;margin-top:1.5rem;width:100%;max-width:560px;
       background:#15151e;border:1px solid #2a2a3a;border-radius:18px;padding:1.25rem}
     #resultLabel{font-size:.8rem;color:#666;margin-bottom:.75rem;text-align:center}
     .compare-wrap{display:grid;grid-template-columns:1fr 1fr;gap:8px}
     .compare-wrap figure{margin:0;text-align:center}
     .compare-wrap figcaption{font-size:.68rem;color:#555;margin-bottom:4px}
-    #origPreview{width:100%;border-radius:8px;border:1px solid #2a2a3a;object-fit:contain;max-height:260px}
+    #origPreview{width:100%;border-radius:8px;border:1px solid #2a2a3a;object-fit:contain;max-height:260px;display:block}
     #outCanvas{width:100%;border-radius:8px;border:1px solid #2a2a3a;
       background:repeating-conic-gradient(#1c1c1c 0% 25%,#111 0% 50%) 0 0/14px 14px;
-      max-height:260px;object-fit:contain}
+      max-height:260px;display:block}
     #dlBtn{display:block;width:100%;margin-top:.85rem;padding:.58rem 1.8rem;
       background:#2d9e6b;color:#fff;border:none;border-radius:8px;
       font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s;text-align:center}
@@ -113,17 +112,22 @@
     <button class="btn-retry" id="btnRetry">&#8635; Try again</button>
   </div>
 
+  <!-- file input hidden, triggered manually -->
   <input type="file" id="pick" accept="image/png,image/jpeg,image/webp,image/bmp">
-  <label class="upload-area" for="pick" id="dropArea">
+
+  <!-- drop zone — NOT a <label> so clicking the preview doesn't reopen dialog -->
+  <div id="dropArea">
     <div class="upload-placeholder">
       <span class="icon">&#128247;</span>
-      <strong>Drop image here or click to browse</strong>
+      <strong>Drop image here</strong>
       <small>PNG &bull; JPG &bull; WEBP &bull; BMP</small>
     </div>
     <img id="previewImg" alt="preview">
-    <span class="preview-badge">click to change</span>
-  </label>
+    <span class="preview-hint">click to change</span>
+  </div>
+
   <div class="or"><hr><span>or</span><hr></div>
+  <!-- this label/button opens the file dialog -->
   <label class="btn-pick" for="pick">&#128193; Choose image file</label>
 
   <div id="fileRow">
@@ -179,7 +183,7 @@ const modelBar=$('modelBar'),mbLabel=$('mbLabel'),mbBar=$('mbBar'),mbSub=$('mbSu
       pick=$('pick'),dropArea=$('dropArea'),previewImg=$('previewImg'),
       fileRow=$('fileRow'),fileName=$('fileName'),fileSize=$('fileSize'),
       clearBtn=$('clearBtn'),goBtn=$('goBtn'),progWrap=$('progWrap'),progBar=$('progBar'),
-      statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),resultLabel=$('resultLabel'),
+      statusMsg=$('statusMsg'),errMsg=$('errMsg'),resultBox=$('resultBox'),
       origPreview=$('origPreview'),outCanvas=$('outCanvas'),dlBtn=$('dlBtn');
 
 let aiModel=null,aiProc=null,cf=null,attempt=0;
@@ -207,10 +211,21 @@ async function loadModel(){
 }
 btnRetry.onclick=loadModel;loadModel();
 
+// File input via button/label
 pick.addEventListener('change',()=>{if(pick.files?.[0])setFile(pick.files[0]);});
+
+// Drag and drop on the drop zone div
 dropArea.addEventListener('dragover',e=>{e.preventDefault();dropArea.classList.add('over');});
 dropArea.addEventListener('dragleave',()=>dropArea.classList.remove('over'));
-dropArea.addEventListener('drop',e=>{e.preventDefault();dropArea.classList.remove('over');const f=e.dataTransfer?.files?.[0];if(f)setFile(f);});
+dropArea.addEventListener('drop',e=>{
+  e.preventDefault();dropArea.classList.remove('over');
+  const f=e.dataTransfer?.files?.[0];if(f)setFile(f);
+});
+
+// Click on drop zone (when it already has an image) = re-pick
+dropArea.addEventListener('click',()=>{
+  if(dropArea.classList.contains('has-img'))pick.click();
+});
 
 function setFile(f){
   cf=f;
@@ -223,10 +238,10 @@ function setFile(f){
   statusMsg.textContent='';
   progBar.style.width='0%';
   progWrap.style.display='none';
-  // Show preview in upload box
+  // Show image preview inside drop zone
   const url=URL.createObjectURL(f);
-  previewImg.src=url;
   previewImg.onload=()=>URL.revokeObjectURL(url);
+  previewImg.src=url;
   dropArea.classList.add('has-img');
 }
 
@@ -237,12 +252,11 @@ clearBtn.addEventListener('click',()=>{
   previewImg.src='';dropArea.classList.remove('has-img');
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
+// ======================================================================
 // cleanMask — v16 final
-// ══════════════════════════════════════════════════════════════════════════════
+// ======================================================================
 function cleanMask(maskU8, srcData, W, H) {
   const WH=W*H, DIRS=[-1,1,-W,W];
-
   function bfsLabel(arr, trackPx){
     const lab=new Int32Array(WH), sizes=[], pixMap=trackPx?new Map():null;
     let nL=0;
@@ -269,7 +283,6 @@ function cleanMask(maskU8, srcData, W, H) {
     }
     return{lab,sizes,pixMap};
   }
-
   const smp=[];
   for(let x=0;x<W;x+=3){const t=x*4,b=((H-1)*W+x)*4;smp.push([srcData[t],srcData[t+1],srcData[t+2]]);smp.push([srcData[b],srcData[b+1],srcData[b+2]]);}
   for(let y=1;y<H-1;y+=3){const l=y*W*4,r=(y*W+W-1)*4;smp.push([srcData[l],srcData[l+1],srcData[l+2]]);smp.push([srcData[r],srcData[r+1],srcData[r+2]]);}
@@ -286,14 +299,12 @@ function cleanMask(maskU8, srcData, W, H) {
   const nd=new Float32Array(WH),tp=new Float32Array(WH);
   for(let p=0;p<WH;p++){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];let bk=0,bd=Infinity;for(let k=0;k<K;k++){const dr=r-cents[k][0],dg=g-cents[k][1],db2=b-cents[k][2],d=Math.sqrt(dr*dr+dg*dg+db2*db2);if(d<bd){bd=d;bk=k;}}nd[p]=bd;tp[p]=tols[bk];}
   const isBg=p=>nd[p]<=tp[p];
-
   function isSky(p){const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];return isBg(p)&&(b-r)>15&&(Math.max(r,g,b)-Math.min(r,g,b))<20;}
   function isBody(p){
     const pi=p*4,r=srcData[pi],g=srcData[pi+1],b=srcData[pi+2];
     const sat=Math.max(r,g,b)-Math.min(r,g,b),bright=(r+g+b)/3;
     return ((r>g*1.2&&r>b*1.2&&sat>25)||(r>130&&r>g&&r>b&&sat>20)||(bright>160&&(b-r)<15))&&nd[p]>tp[p]*0.3;
   }
-
   function handleSky(b){
     const sk=new Uint8Array(WH);
     for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
@@ -311,15 +322,12 @@ function cleanMask(maskU8, srcData, W, H) {
           if(!b[nb]&&!sk[nb]){touchesBg=true;break outer;}
         }
       }
-      if(touchesBg){for(const i of px)b[i]=0;}
-      else{for(const i of px)b[i]=1;}
+      if(touchesBg){for(const i of px)b[i]=0;}else{for(const i of px)b[i]=1;}
     }
   }
-
   const bin=new Uint8Array(WH);
   for(let i=0;i<WH;i++)bin[i]=maskU8[i]>127?1:0;
   {const minSz=Math.floor(WH*0.005);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
-
   function score(b){
     const sk=new Uint8Array(WH);for(let i=0;i<WH;i++)if(b[i]&&isSky(i))sk[i]=1;
     const{lab:sl,sizes:ss,pixMap:sp}=bfsLabel(sk,true);
@@ -337,54 +345,32 @@ function cleanMask(maskU8, srcData, W, H) {
     for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)s+=size*2;}
     return s;
   }
-
   let prev=Infinity;
   for(let iter=0;iter<8;iter++){
     const sc=score(bin);
     if(sc===0||sc>=prev)break;
     prev=sc;
     handleSky(bin);
-    {
-      const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;
-      const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);
-      const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);
-      for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)for(const i of px)bin[i]=1;}
-    }
+    {const bg=new Uint8Array(WH);for(let i=0;i<WH;i++)bg[i]=bin[i]?0:1;const{lab:bgL,sizes:bgS,pixMap:bgP}=bfsLabel(bg,true);const borL=new Set();for(let x=0;x<W;x++){borL.add(bgL[x]);borL.add(bgL[(H-1)*W+x]);}for(let y=0;y<H;y++){borL.add(bgL[y*W]);borL.add(bgL[y*W+W-1]);}borL.delete(0);for(const{id,size,onBorder}of bgS){if(onBorder||!size)continue;const px=bgP.get(id);const bf=px.filter(isBg).length/size;if(bf<0.70)for(const i of px)bin[i]=1;}}
     for(let pass=0;pass<2;pass++){
-      const dil=new Uint8Array(bin);
-      for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
-      const ero=new Uint8Array(dil);
-      for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}
+      const dil=new Uint8Array(bin);for(let p=0;p<WH;p++){if(dil[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(bin[nb]){dil[p]=1;break;}}}
+      const ero=new Uint8Array(dil);for(let p=0;p<WH;p++){if(!ero[p])continue;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH){ero[p]=0;break;}if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(!dil[nb]){ero[p]=0;break;}}}
       for(let i=0;i<WH;i++)if(ero[i])bin[i]=1;
     }
     handleSky(bin);
     for(let pass=0;pass<3;pass++){
       const prev2=new Uint8Array(bin);
-      for(let p=0;p<WH;p++){
-        if(prev2[p])continue;
-        let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}
-        if(hasFg&&isBody(p))bin[p]=1;
-      }
+      for(let p=0;p<WH;p++){if(prev2[p])continue;let hasFg=false;for(let d=0;d<4;d++){const nb=p+DIRS[d];if(nb<0||nb>=WH)continue;if(DIRS[d]===-1&&p%W===0)continue;if(DIRS[d]===1&&nb%W===0)continue;if(prev2[nb]){hasFg=true;break;}}if(hasFg&&isBody(p))bin[p]=1;}
     }
     handleSky(bin);
   }
-
   for(let y=0;y<H;y++){
     const rb=y*W;let rs=-1;
-    const flush=end=>{
-      const rw=end-rs;if(rw>=20){rs=-1;return;}
-      let sR=0,sG=0,sB=0,bc=0;
-      for(let x=rs;x<end;x++){const pi=(rb+x)*4;sR+=srcData[pi];sG+=srcData[pi+1];sB+=srcData[pi+2];if(isBg(rb+x))bc++;}
-      const aR=sR/rw,aG=sG/rw,aB=sB/rw,sat=Math.max(aR,aG,aB)-Math.min(aR,aG,aB);
-      if((aB-aR)>15&&bc/rw>0.60&&sat<20)for(let x=rs;x<end;x++)bin[rb+x]=0;
-      rs=-1;
-    };
+    const flush=end=>{const rw=end-rs;if(rw>=20){rs=-1;return;}let sR=0,sG=0,sB=0,bc=0;for(let x=rs;x<end;x++){const pi=(rb+x)*4;sR+=srcData[pi];sG+=srcData[pi+1];sB+=srcData[pi+2];if(isBg(rb+x))bc++;}const aR=sR/rw,aG=sG/rw,aB=sB/rw,sat=Math.max(aR,aG,aB)-Math.min(aR,aG,aB);if((aB-aR)>15&&bc/rw>0.60&&sat<20)for(let x=rs;x<end;x++)bin[rb+x]=0;rs=-1;};
     for(let x=0;x<W;x++){if(bin[rb+x]){if(rs<0)rs=x;}else{if(rs>=0)flush(x);}}
     if(rs>=0)flush(W);
   }
-
   {const minSz=Math.floor(WH*0.003);const{lab,sizes}=bfsLabel(bin,false);const keep=new Set(sizes.filter(s=>s.size>=minSz).map(s=>s.id));for(let i=0;i<WH;i++)if(bin[i]&&!keep.has(lab[i]))bin[i]=0;}
-
   const alpha=new Float32Array(WH);for(let i=0;i<WH;i++)alpha[i]=bin[i];
   const bl=new Float32Array(WH);
   for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const ci=y*W+x;bl[ci]=(alpha[(y-1)*W+(x-1)]+alpha[(y-1)*W+x]+alpha[(y-1)*W+(x+1)]+alpha[y*W+(x-1)]+alpha[ci]+alpha[y*W+(x+1)]+alpha[(y+1)*W+(x-1)]+alpha[(y+1)*W+x]+alpha[(y+1)*W+(x+1)])/9;}
@@ -430,9 +416,8 @@ goBtn.addEventListener('click',async()=>{
     const outCtx=outCanvas.getContext('2d');const outData=outCtx.createImageData(W,H);
     for(let i=0;i<W*H;i++){const pi=i*4;outData.data[pi]=srcData[pi];outData.data[pi+1]=srcData[pi+1];outData.data[pi+2]=srcData[pi+2];outData.data[pi+3]=cleanAlpha[i];}
     outCtx.putImageData(outData,0,0);
-    // Show original image in the comparison
     origPreview.src=dataUrl;
-    progBar.style.width='100%';statusMsg.textContent='✅ Done!';resultLabel.textContent='✅ Background removed!';
+    progBar.style.width='100%';statusMsg.textContent='✅ Done!';
     dlBtn.onclick=()=>{const a=document.createElement('a');a.download=(cf.name.replace(/\.[^.]+$/,'')||'image')+'_nobg.png';a.href=outCanvas.toDataURL('image/png');a.click();};
     resultBox.style.display='block';resultBox.scrollIntoView({behavior:'smooth',block:'nearest'});
   }catch(err){
