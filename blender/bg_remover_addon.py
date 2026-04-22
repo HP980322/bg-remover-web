@@ -13,7 +13,7 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (2, 1, 3),
+    "version": (2, 1, 4),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (local or auto-managed server)",
@@ -43,19 +43,29 @@ SERVER_SCRIPT_URL = (
     "main/blender/bg_remover_server.py"
 )
 
+# IMPORTANT: transformers pinned <5.0 because v5 broke RMBG-1.4's
+# trust_remote_code path (`all_tied_weights_keys` rename).
+# See https://github.com/huggingface/transformers/issues/43957
 SERVER_REQS_LIGHT = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "python-multipart>=0.0.9",
     "Pillow>=10.0",
     "numpy>=1.24,<2.0",
-    "transformers>=4.40",
+    "transformers>=4.40,<5.0",
 ]
 
 PYTORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 SERVER_REQS_TORCH = [
     "torch>=2.0",
     "torchvision>=0.15",
+]
+
+# LOCAL mode (Blender's own Python) deps — same pin for the same reason.
+LOCAL_REQS = [
+    "torch",
+    "torchvision",
+    "transformers>=4.40,<5.0",
 ]
 
 MIN_PY = (3, 9)
@@ -116,7 +126,6 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
                 box.label(text="First start installs ~2GB of deps — be patient.", icon='INFO')
                 box.label(text="Python 3.11 or 3.12 recommended (torch wheels).", icon='INFO')
 
-                # Advanced section — collapsed by default, these are rarely needed
                 adv_header = box.row()
                 adv_header.prop(
                     self, "show_advanced",
@@ -235,32 +244,57 @@ def ensure_pillow():
     return True
 
 
+def _transformers_is_v5_plus():
+    """If an incompatible transformers 5.x is already installed, we need to
+    downgrade it — not just 'install if missing'."""
+    try:
+        import transformers  # noqa
+        major = int(transformers.__version__.split('.')[0])
+        return major >= 5
+    except Exception:
+        return False
+
+
 def ensure_deps():
+    """LOCAL mode: install torch/torchvision/transformers into Blender's Python.
+    If a too-new transformers is already installed, downgrade it."""
     ensure_pillow()
     python = sys.executable
-    missing = []
+
+    need_install = []
     try:
         import torch  # noqa: F401
     except ImportError:
-        missing.append('torch')
-    try:
-        import transformers  # noqa: F401
-    except ImportError:
-        missing.append('transformers')
+        need_install.append('torch')
     try:
         import torchvision  # noqa: F401
     except ImportError:
-        missing.append('torchvision')
-    if missing:
+        need_install.append('torchvision')
+
+    # transformers: must be >=4.40 AND <5.0
+    try:
+        import transformers  # noqa: F401
+        if _transformers_is_v5_plus():
+            _log("transformers 5.x detected — downgrading to <5.0 for RMBG compat")
+            need_install.append('transformers>=4.40,<5.0')
+    except ImportError:
+        need_install.append('transformers>=4.40,<5.0')
+
+    if need_install:
         try:
             subprocess.check_call(
-                [python, '-m', 'pip', 'install', '--upgrade', '--user'] + missing,
+                [python, '-m', 'pip', 'install', '--upgrade', '--user'] + need_install,
             )
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
-                f"Failed to install {', '.join(missing)} into Blender's Python. {e}"
+                f"Failed to install {', '.join(need_install)} into Blender's Python. {e}"
             )
         _refresh_sys_path()
+        # If we downgraded transformers, force re-import in case it was already loaded
+        if any('transformers' in s for s in need_install):
+            for mod in list(sys.modules):
+                if mod == 'transformers' or mod.startswith('transformers.'):
+                    del sys.modules[mod]
     return True
 
 
@@ -410,6 +444,17 @@ def _ensure_server_script(prefs):
     return cached
 
 
+def _venv_has_bad_transformers(venv_python):
+    """Return True if the venv has transformers 5.x installed (incompatible)."""
+    probe = subprocess.run(
+        [str(venv_python), '-c',
+         'import transformers; import sys; sys.exit(0 if int(transformers.__version__.split(".")[0]) < 5 else 1)'],
+        capture_output=True, text=True,
+    )
+    # returncode 1 means transformers>=5.x is installed (bad)
+    return probe.returncode == 1
+
+
 def _ensure_server_venv(system_python, sys_py_ver):
     global _server_venv_python
 
@@ -423,14 +468,38 @@ def _ensure_server_venv(system_python, sys_py_ver):
         _log(f"Creating venv at {venv_dir}")
         _run_logged([system_python, '-m', 'venv', str(venv_dir)])
 
+    # Full probe — all deps importable AND transformers is <5.0
     probe = subprocess.run(
         [str(venv_python), '-c',
-         'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; print("ok")'],
+         'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; '
+         'import sys; sys.exit(0 if int(transformers.__version__.split(".")[0]) < 5 else 2)'],
         capture_output=True, text=True,
     )
     if probe.returncode == 0:
         _server_venv_python = str(venv_python)
         return _server_venv_python
+
+    # If transformers is too new, force downgrade it
+    if _venv_has_bad_transformers(venv_python):
+        _log("Found transformers 5.x in venv — downgrading to <5.0 for RMBG compat")
+        try:
+            _run_logged(
+                [str(venv_python), '-m', 'pip', 'install',
+                 '--upgrade', 'transformers>=4.40,<5.0']
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Failed to downgrade transformers.\nLog tail:\n{(e.output or '')[-1200:]}"
+            )
+        # Re-probe after downgrade
+        probe = subprocess.run(
+            [str(venv_python), '-c',
+             'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; print("ok")'],
+            capture_output=True, text=True,
+        )
+        if probe.returncode == 0:
+            _server_venv_python = str(venv_python)
+            return _server_venv_python
 
     _log("Installing server dependencies — this can take several minutes.")
 
@@ -438,8 +507,7 @@ def _ensure_server_venv(system_python, sys_py_ver):
         _run_logged([str(venv_python), '-m', 'pip', 'install', '--upgrade', 'pip'])
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
-            f"Failed to upgrade pip in the venv.\n"
-            f"Log tail:\n{(e.output or '')[-1200:]}"
+            f"Failed to upgrade pip in the venv.\nLog tail:\n{(e.output or '')[-1200:]}"
         )
 
     try:
