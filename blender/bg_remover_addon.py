@@ -13,7 +13,7 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (2, 1, 2),
+    "version": (2, 1, 3),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (local or auto-managed server)",
@@ -43,20 +43,15 @@ SERVER_SCRIPT_URL = (
     "main/blender/bg_remover_server.py"
 )
 
-# Lightweight deps — plain PyPI.
 SERVER_REQS_LIGHT = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "python-multipart>=0.0.9",
     "Pillow>=10.0",
-    "numpy>=1.24,<2.0",   # torch 2.2 is happier with numpy<2
+    "numpy>=1.24,<2.0",
     "transformers>=4.40",
 ]
 
-# Torch stack — installed from the official PyTorch wheel index, which has
-# much broader Python-version coverage than PyPI. CPU wheels are ~200 MB.
-# For GPU support the user can pre-install their preferred torch build
-# and we'll skip reinstalling.
 PYTORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 SERVER_REQS_TORCH = [
     "torch>=2.0",
@@ -64,7 +59,7 @@ SERVER_REQS_TORCH = [
 ]
 
 MIN_PY = (3, 9)
-MAX_PY_HINT = (3, 12)  # Versions above this often lack torch wheels
+MAX_PY_HINT = (3, 12)
 
 
 # ── Preferences ───────────────────────────────────────────────────────────────
@@ -91,16 +86,21 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
         description="When SERVER mode is on and the server URL is local, automatically launch it as a subprocess if not already running",
     )
     system_python: bpy.props.StringProperty(
-        name="System Python",
+        name="System Python (optional)",
         default="",
-        description="Path to a Python 3.9–3.12 executable used to run the server. Leave blank to auto-detect.",
+        description="Leave blank to auto-detect 'python' on PATH. Only set this if auto-detect picks the wrong version, or if Python isn't on PATH.",
         subtype='FILE_PATH',
     )
     server_script_path: bpy.props.StringProperty(
-        name="Server Script",
+        name="Server Script (optional)",
         default="",
-        description="Optional: path to a local bg_remover_server.py. Leave blank to auto-download from GitHub.",
+        description="Leave blank to auto-download bg_remover_server.py from GitHub. Only set this if you want to use a local modified copy.",
         subtype='FILE_PATH',
+    )
+    show_advanced: bpy.props.BoolProperty(
+        name="Advanced",
+        default=False,
+        description="Show advanced overrides (system Python, server script path)",
     )
     model_loaded: bpy.props.BoolProperty(default=False)
 
@@ -113,11 +113,21 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
             box.prop(self, "server_url")
             box.prop(self, "auto_start_server")
             if self.auto_start_server:
-                col = box.column(align=True)
-                col.prop(self, "system_python")
-                col.prop(self, "server_script_path")
-                col.label(text="First start installs ~2GB of deps — be patient.", icon='INFO')
-                col.label(text="Python 3.11 or 3.12 recommended (torch wheels).", icon='INFO')
+                box.label(text="First start installs ~2GB of deps — be patient.", icon='INFO')
+                box.label(text="Python 3.11 or 3.12 recommended (torch wheels).", icon='INFO')
+
+                # Advanced section — collapsed by default, these are rarely needed
+                adv_header = box.row()
+                adv_header.prop(
+                    self, "show_advanced",
+                    icon='TRIA_DOWN' if self.show_advanced else 'TRIA_RIGHT',
+                    emboss=False, text="Advanced (optional overrides)",
+                )
+                if self.show_advanced:
+                    col = box.column(align=True)
+                    col.prop(self, "system_python")
+                    col.prop(self, "server_script_path")
+                    col.label(text="Leave both blank for auto-detect / auto-download.", icon='INFO')
 
             row = box.row(align=True)
             row.operator("bgremover.test_connection", icon="LINKED")
@@ -161,7 +171,6 @@ def _log_path():
 
 
 def _log(msg):
-    """Append a line to server.log and also print to Blender's console."""
     print(f"[BG Remover] {msg}")
     try:
         with open(_log_path(), 'a', encoding='utf-8') as f:
@@ -171,8 +180,6 @@ def _log(msg):
 
 
 def _run_logged(cmd, **kw):
-    """Run a subprocess, stream stdout+stderr into server.log, and raise
-    CalledProcessError with a useful message (including the log tail) on failure."""
     _log(f"$ {' '.join(str(c) for c in cmd)}")
     with open(_log_path(), 'ab', buffering=0) as log_fh:
         proc = subprocess.Popen(
@@ -184,9 +191,7 @@ def _run_logged(cmd, **kw):
         rc = proc.wait()
     if rc != 0:
         tail = _read_log_tail(1500)
-        raise subprocess.CalledProcessError(
-            rc, cmd, output=tail,
-        )
+        raise subprocess.CalledProcessError(rc, cmd, output=tail)
 
 
 def _refresh_sys_path():
@@ -200,7 +205,6 @@ def _refresh_sys_path():
 
 
 def ensure_pillow():
-    """Make sure Pillow is importable in Blender's own Python (for image I/O)."""
     try:
         import PIL  # noqa: F401
         return True
@@ -232,7 +236,6 @@ def ensure_pillow():
 
 
 def ensure_deps():
-    """LOCAL mode only: install torch + transformers + torchvision into Blender's Python."""
     ensure_pillow()
     python = sys.executable
     missing = []
@@ -340,7 +343,6 @@ def _is_localhost_url(url):
 # ── Server manager ────────────────────────────────────────────────────────────
 
 def _python_version(py):
-    """Return (major, minor) for a Python executable, or None."""
     try:
         out = subprocess.run(
             [py, '-c', 'import sys; print(sys.version_info[0], sys.version_info[1])'],
@@ -362,7 +364,6 @@ def _resolve_system_python(prefs):
         p = shutil.which(name)
         if p:
             candidates.append(p)
-    # Also look in py launcher variants on Windows
     if os.name == 'nt':
         for v in ('3.12', '3.11', '3.10', '3.9'):
             p = shutil.which(f'py -{v}')
@@ -410,14 +411,6 @@ def _ensure_server_script(prefs):
 
 
 def _ensure_server_venv(system_python, sys_py_ver):
-    """Create a venv (once) and install server deps into it.
-    Returns the path to python inside the venv.
-
-    Install strategy:
-      1. Upgrade pip in the venv
-      2. Install light deps (fastapi, transformers, Pillow, numpy) from PyPI
-      3. Install torch + torchvision from the PyTorch wheel index
-         (much broader wheel coverage than PyPI)"""
     global _server_venv_python
 
     venv_dir = _addon_data_dir() / 'venv'
@@ -430,7 +423,6 @@ def _ensure_server_venv(system_python, sys_py_ver):
         _log(f"Creating venv at {venv_dir}")
         _run_logged([system_python, '-m', 'venv', str(venv_dir)])
 
-    # Are all deps already importable? Skip install if so.
     probe = subprocess.run(
         [str(venv_python), '-c',
          'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; print("ok")'],
@@ -442,7 +434,6 @@ def _ensure_server_venv(system_python, sys_py_ver):
 
     _log("Installing server dependencies — this can take several minutes.")
 
-    # Step 1: pip upgrade
     try:
         _run_logged([str(venv_python), '-m', 'pip', 'install', '--upgrade', 'pip'])
     except subprocess.CalledProcessError as e:
@@ -451,7 +442,6 @@ def _ensure_server_venv(system_python, sys_py_ver):
             f"Log tail:\n{(e.output or '')[-1200:]}"
         )
 
-    # Step 2: light deps from PyPI
     try:
         _run_logged(
             [str(venv_python), '-m', 'pip', 'install', '--upgrade'] + SERVER_REQS_LIGHT
@@ -462,7 +452,6 @@ def _ensure_server_venv(system_python, sys_py_ver):
             f"Log tail:\n{(e.output or '')[-1200:]}"
         )
 
-    # Step 3: torch + torchvision from PyTorch index
     try:
         _run_logged(
             [str(venv_python), '-m', 'pip', 'install',
@@ -484,7 +473,6 @@ def _ensure_server_venv(system_python, sys_py_ver):
             f"{hint}"
         )
 
-    # Final probe
     probe = subprocess.run(
         [str(venv_python), '-c',
          'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; print("ok")'],
