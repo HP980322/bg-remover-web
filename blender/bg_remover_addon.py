@@ -5,8 +5,9 @@
 # Two modes:
 #   1. LOCAL  — runs RMBG-1.4 directly inside Blender's Python
 #               (auto-installs transformers + torch on first use)
-#   2. SERVER — sends images to your running bg_remover_server.py
-#               (faster if you have a GPU server)
+#   2. SERVER — sends images to bg_remover_server.py
+#               If not running, the addon will auto-start it
+#               using your system Python + ship an isolated venv.
 #
 # Installation:
 #   Edit > Preferences > Add-ons > Install > select this file
@@ -19,10 +20,10 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (2, 0, 1),
+    "version": (2, 1, 0),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
-    "description": "Remove image/render background using RMBG-1.4 AI (local or server)",
+    "description": "Remove image/render background using RMBG-1.4 AI (local or auto-managed server)",
     "category": "Image",
 }
 
@@ -32,6 +33,9 @@ import io
 import sys
 import site
 import math
+import shutil
+import atexit
+import signal
 import struct
 import tempfile
 import importlib
@@ -39,6 +43,25 @@ import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
+
+
+SERVER_SCRIPT_URL = (
+    "https://raw.githubusercontent.com/HP980322/bg-remover-web/"
+    "main/blender/bg_remover_server.py"
+)
+
+# Packages the server needs in its own venv. Kept in sync with
+# blender/requirements.txt in the repo.
+SERVER_REQUIREMENTS = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    "Pillow>=10.0",
+    "numpy>=1.24",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "transformers>=4.40",
+]
 
 
 # ── Preferences ───────────────────────────────────────────────────────────────
@@ -50,24 +73,54 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
         name="Mode",
         items=[
             ('LOCAL',  'Local (built-in AI)',  'Run RMBG-1.4 directly in Blender — no server needed'),
-            ('SERVER', 'Server',               'Send images to a running bg_remover_server.py'),
+            ('SERVER', 'Server',               'Send images to bg_remover_server.py (auto-managed)'),
         ],
         default='LOCAL',
     )
     server_url: bpy.props.StringProperty(
         name="Server URL",
         default="http://localhost:8000",
-        description="URL of the running bg_remover_server.py (Server mode only)",
+        description="URL of bg_remover_server.py. localhost URLs are auto-started; remote URLs must be started by you.",
+    )
+    auto_start_server: bpy.props.BoolProperty(
+        name="Auto-start server",
+        default=True,
+        description="When SERVER mode is on and the server URL is local, automatically launch it as a subprocess if not already running",
+    )
+    system_python: bpy.props.StringProperty(
+        name="System Python",
+        default="",
+        description="Path to a Python 3.10+ executable used to run the server. Leave blank to auto-detect (uses 'python' on PATH).",
+        subtype='FILE_PATH',
+    )
+    server_script_path: bpy.props.StringProperty(
+        name="Server Script",
+        default="",
+        description="Optional: path to a local bg_remover_server.py. Leave blank to auto-download from GitHub.",
+        subtype='FILE_PATH',
     )
     model_loaded: bpy.props.BoolProperty(default=False)
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "mode", expand=True)
+
         if self.mode == 'SERVER':
-            layout.prop(self, "server_url")
-            layout.operator("bgremover.test_connection", icon="LINKED")
-        # Pillow is needed in BOTH modes (for image I/O), so always show install button
+            box = layout.box()
+            box.prop(self, "server_url")
+            box.prop(self, "auto_start_server")
+            if self.auto_start_server:
+                col = box.column(align=True)
+                col.prop(self, "system_python")
+                col.prop(self, "server_script_path")
+                col.label(text="First start downloads ~2GB of deps — be patient.", icon='INFO')
+
+            row = box.row(align=True)
+            row.operator("bgremover.test_connection", icon="LINKED")
+            row.operator("bgremover.start_server", icon="PLAY")
+            row.operator("bgremover.stop_server", icon="PAUSE")
+
+        # Pillow is needed in BOTH modes (for image I/O)
         row = layout.row()
         row.operator("bgremover.install_deps", icon="IMPORT")
 
@@ -78,9 +131,23 @@ _model = None
 _processor = None
 _device = 'cpu'
 
+# Auto-started server subprocess state
+_server_proc = None           # subprocess.Popen instance
+_server_log_path = None       # log file path
+_server_workdir = None        # working dir for the subprocess
+_server_venv_python = None    # python inside the venv we set up
+
 
 def get_prefs(context):
     return context.preferences.addons[__name__].preferences
+
+
+def _addon_data_dir():
+    """Per-user data dir where we stash the venv, logs, and downloaded server script."""
+    base = Path(bpy.utils.user_resource('SCRIPTS', path='addons'))
+    d = base / 'bg_remover_data'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _refresh_sys_path():
@@ -96,9 +163,7 @@ def _refresh_sys_path():
 
 
 def ensure_pillow():
-    """Make sure Pillow (PIL) is importable. Install if missing.
-    Pillow is needed in BOTH local and server modes for image I/O.
-    Returns True on success, raises RuntimeError on failure."""
+    """Make sure Pillow (PIL) is importable in Blender's Python. Install if missing."""
     try:
         import PIL  # noqa: F401
         return True
@@ -106,14 +171,12 @@ def ensure_pillow():
         pass
 
     python = sys.executable
-    # Make sure pip is available inside Blender's bundled Python
     try:
         subprocess.check_call(
             [python, '-m', 'ensurepip', '--upgrade'],
             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
         )
     except Exception:
-        # ensurepip may be disabled on some systems; that's OK if pip still works
         pass
 
     try:
@@ -123,8 +186,8 @@ def ensure_pillow():
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             "Failed to install Pillow. Try running Blender as Administrator "
-            "(Windows) or with sudo (Linux/macOS), then click 'Install AI "
-            f"Dependencies' again. Error: {e}"
+            "(Windows) or with sudo (Linux/macOS). "
+            f"Error: {e}"
         )
 
     _refresh_sys_path()
@@ -140,9 +203,8 @@ def ensure_pillow():
 
 
 def ensure_deps():
-    """Install Pillow + torch + transformers + torchvision into Blender's
-    Python if missing. Pillow first (fast, always needed), then the heavy
-    AI libs."""
+    """Install Pillow + torch + transformers + torchvision into Blender's Python
+    (for LOCAL mode). Pillow first, then the heavy AI libs."""
     ensure_pillow()
 
     python = sys.executable
@@ -202,7 +264,7 @@ def load_model():
         return False
 
 
-# ── Core: remove bg from PIL Image (local) ────────────────────────────────────
+# ── Local inference ───────────────────────────────────────────────────────────
 
 def remove_bg_local(pil_img):
     """Run RMBG-1.4 on a PIL RGB image, return RGBA PIL image."""
@@ -229,7 +291,7 @@ def remove_bg_local(pil_img):
     return Image.fromarray(out, 'RGBA')
 
 
-# ── Core: remove bg via server ────────────────────────────────────────────────
+# ── Server client ─────────────────────────────────────────────────────────────
 
 def remove_bg_server(server_url, png_bytes, filename):
     """POST image to /remove-bg/image, return PNG bytes."""
@@ -246,14 +308,282 @@ def remove_bg_server(server_url, png_bytes, filename):
         headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
         method='POST',
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=300) as resp:
         return resp.read()
+
+
+def server_is_alive(server_url, timeout=2):
+    """Quick health check. Returns True if server responds OK."""
+    try:
+        req = urllib.request.Request(f"{server_url}/health", method='GET')
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _is_localhost_url(url):
+    return any(h in url for h in ('localhost', '127.0.0.1', '0.0.0.0'))
+
+
+# ── Server manager ────────────────────────────────────────────────────────────
+
+def _resolve_system_python(prefs):
+    """Find a usable Python 3 outside of Blender's bundle."""
+    candidates = []
+    if prefs.system_python:
+        candidates.append(prefs.system_python)
+    # Common names
+    for name in ('python3', 'python'):
+        p = shutil.which(name)
+        if p:
+            candidates.append(p)
+    # Filter out Blender's own python (which won't have pip / FastAPI in a clean way)
+    blender_py = Path(sys.executable).resolve()
+    for c in candidates:
+        if not c:
+            continue
+        try:
+            if Path(c).resolve() == blender_py:
+                continue
+        except Exception:
+            pass
+        # sanity check: it runs, and isn't ancient
+        try:
+            out = subprocess.run(
+                [c, '-c', 'import sys; print(sys.version_info[:2])'],
+                capture_output=True, text=True, timeout=10,
+            )
+            if out.returncode == 0:
+                return c
+        except Exception:
+            continue
+    return None
+
+
+def _ensure_server_script(prefs):
+    """Return a path to bg_remover_server.py, downloading it if needed."""
+    # 1. Explicit path set by user
+    if prefs.server_script_path:
+        p = Path(prefs.server_script_path)
+        if p.is_file():
+            return p
+
+    # 2. Bundled next to the addon (if shipped as a folder install)
+    here = Path(__file__).parent
+    sibling = here / 'bg_remover_server.py'
+    if sibling.is_file():
+        return sibling
+
+    # 3. Cached download
+    data = _addon_data_dir()
+    cached = data / 'bg_remover_server.py'
+    if cached.is_file():
+        return cached
+
+    # 4. Download
+    print(f"[BG Remover] Downloading server script from {SERVER_SCRIPT_URL}")
+    try:
+        with urllib.request.urlopen(SERVER_SCRIPT_URL, timeout=30) as resp:
+            cached.write_bytes(resp.read())
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not download server script: {e}\n"
+            "Either check your internet connection, or download "
+            f"{SERVER_SCRIPT_URL} manually and point the 'Server Script' "
+            "preference at it."
+        )
+    return cached
+
+
+def _ensure_server_venv(system_python):
+    """Create (once) a venv next to the addon and install server deps into it.
+    Returns the path to python inside the venv."""
+    global _server_venv_python
+
+    venv_dir = _addon_data_dir() / 'venv'
+    # Windows uses Scripts/, Linux+macOS use bin/
+    if os.name == 'nt':
+        venv_python = venv_dir / 'Scripts' / 'python.exe'
+    else:
+        venv_python = venv_dir / 'bin' / 'python'
+
+    if not venv_python.is_file():
+        print(f"[BG Remover] Creating venv at {venv_dir}")
+        subprocess.check_call(
+            [system_python, '-m', 'venv', str(venv_dir)],
+        )
+
+    # Quick check: are the deps already there?
+    probe = subprocess.run(
+        [str(venv_python), '-c',
+         'import fastapi, uvicorn, torch, transformers, torchvision, PIL; print("ok")'],
+        capture_output=True, text=True,
+    )
+    if probe.returncode != 0:
+        print("[BG Remover] Installing server dependencies (this can take a while)…")
+        # Upgrade pip first
+        subprocess.check_call(
+            [str(venv_python), '-m', 'pip', 'install', '--upgrade', 'pip'],
+        )
+        subprocess.check_call(
+            [str(venv_python), '-m', 'pip', 'install'] + SERVER_REQUIREMENTS,
+        )
+    _server_venv_python = str(venv_python)
+    return _server_venv_python
+
+
+def _port_from_url(url):
+    try:
+        return int(url.rsplit(':', 1)[-1].split('/')[0])
+    except Exception:
+        return 8000
+
+
+def start_server(prefs):
+    """Launch bg_remover_server.py as a background subprocess.
+    Returns immediately; caller polls server_is_alive()."""
+    global _server_proc, _server_log_path, _server_workdir
+
+    if not _is_localhost_url(prefs.server_url):
+        raise RuntimeError(
+            f"Auto-start only works for local URLs. {prefs.server_url} looks "
+            "remote — start that server manually on its machine."
+        )
+
+    if _server_proc and _server_proc.poll() is None:
+        return  # already running
+
+    system_python = _resolve_system_python(prefs)
+    if not system_python:
+        raise RuntimeError(
+            "No usable system Python found. Install Python 3.10+ from "
+            "python.org, or set 'System Python' in addon preferences."
+        )
+
+    script = _ensure_server_script(prefs)
+    venv_python = _ensure_server_venv(system_python)
+
+    data = _addon_data_dir()
+    _server_log_path = data / 'server.log'
+    _server_workdir = script.parent
+
+    port = _port_from_url(prefs.server_url)
+    env = os.environ.copy()
+    env['BG_REMOVER_PORT'] = str(port)
+    env['PYTHONUNBUFFERED'] = '1'
+
+    # Don't pop a console window on Windows; the log file has everything.
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+
+    log_fh = open(_server_log_path, 'ab', buffering=0)
+    print(f"[BG Remover] Launching server: {venv_python} {script} (port {port})")
+    _server_proc = subprocess.Popen(
+        [venv_python, str(script)],
+        cwd=str(_server_workdir),
+        env=env,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+
+
+def stop_server():
+    global _server_proc
+    if _server_proc and _server_proc.poll() is None:
+        try:
+            _server_proc.terminate()
+            try:
+                _server_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _server_proc.kill()
+        except Exception as e:
+            print(f"[BG Remover] Error stopping server: {e}")
+    _server_proc = None
+
+
+atexit.register(stop_server)
+
+
+def ensure_server_running_modal(context, operator, on_ready):
+    """Kick off the server if needed, then run on_ready() when /health responds.
+    Uses a Blender timer so the UI stays responsive.
+
+    - If server already alive → calls on_ready() immediately (returns True).
+    - Otherwise starts server + registers timer; returns False. Caller should
+      return {'RUNNING_MODAL'}."""
+    prefs = get_prefs(context)
+
+    if server_is_alive(prefs.server_url):
+        on_ready()
+        return True
+
+    if not prefs.auto_start_server:
+        raise RuntimeError(
+            f"Server at {prefs.server_url} is not running and auto-start is off."
+        )
+
+    if not _is_localhost_url(prefs.server_url):
+        raise RuntimeError(
+            f"Cannot auto-start a remote server ({prefs.server_url}). "
+            "Start it manually, or use LOCAL mode."
+        )
+
+    start_server(prefs)
+
+    # Register a timer to poll /health. We use window_manager.event_timer_add
+    # only inside a proper modal operator; for simplicity use bpy.app.timers.
+    deadline = {'t': 0.0, 'max': 600.0}  # 10 minutes for first-time model download
+
+    def _poll():
+        # Check subprocess health
+        if _server_proc is None or _server_proc.poll() is not None:
+            # Process died — surface the tail of the log
+            tail = ""
+            try:
+                if _server_log_path and _server_log_path.exists():
+                    with open(_server_log_path, 'rb') as f:
+                        f.seek(max(0, _server_log_path.stat().st_size - 2000))
+                        tail = f.read().decode('utf-8', errors='replace')
+            except Exception:
+                pass
+            operator.report(
+                {'ERROR'},
+                f"Server process exited unexpectedly. Log tail:\n{tail[-800:]}"
+            )
+            return None  # stop timer
+
+        if server_is_alive(prefs.server_url, timeout=1):
+            try:
+                on_ready()
+            except Exception as e:
+                operator.report({'ERROR'}, f"Post-startup call failed: {e}")
+            return None  # stop timer
+
+        deadline['t'] += 2.0
+        if deadline['t'] >= deadline['max']:
+            operator.report(
+                {'ERROR'},
+                f"Server didn't become ready within {int(deadline['max'])}s. "
+                f"Check {_server_log_path}"
+            )
+            return None
+        return 2.0  # try again in 2 seconds
+
+    bpy.app.timers.register(_poll, first_interval=2.0)
+    operator.report(
+        {'INFO'},
+        "Starting server — first run installs deps + downloads model (~2GB, "
+        "can take several minutes). Check server.log for progress."
+    )
+    return False
 
 
 # ── Blender image helpers ─────────────────────────────────────────────────────
 
 def blender_image_to_pil(image):
-    """Convert a Blender image to a PIL RGB image via temp PNG."""
     ensure_pillow()
     from PIL import Image
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
@@ -266,7 +596,6 @@ def blender_image_to_pil(image):
 
 
 def blender_image_to_png_bytes(image):
-    """Save Blender image to PNG bytes."""
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
         tmp = tf.name
     try:
@@ -278,7 +607,6 @@ def blender_image_to_png_bytes(image):
 
 
 def pil_to_blender_image(pil_img, name):
-    """Load a PIL RGBA image as a new Blender image, packed into .blend."""
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
         pil_img.save(tf, 'PNG')
         tmp = tf.name
@@ -292,7 +620,6 @@ def pil_to_blender_image(pil_img, name):
 
 
 def png_bytes_to_blender_image(png_bytes, name):
-    """Load raw PNG bytes as a new Blender image, packed."""
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
         tf.write(png_bytes)
         tmp = tf.name
@@ -308,7 +635,8 @@ def png_bytes_to_blender_image(png_bytes, name):
 # ── Operators ─────────────────────────────────────────────────────────────────
 
 class BGRemover_OT_InstallDeps(bpy.types.Operator):
-    """Install required Python packages (Pillow, torch, transformers) into Blender"""
+    """Install required Python packages into Blender (Pillow, torch, transformers).
+    This is only needed for LOCAL mode. SERVER mode installs its own deps in a venv."""
     bl_idname = 'bgremover.install_deps'
     bl_label = 'Install AI Dependencies'
 
@@ -330,15 +658,47 @@ class BGRemover_OT_TestConnection(bpy.types.Operator):
 
     def execute(self, context):
         prefs = get_prefs(context)
-        try:
-            req = urllib.request.Request(f"{prefs.server_url}/health", method='GET')
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    self.report({'INFO'}, f'✅ Connected to {prefs.server_url}')
-                    return {'FINISHED'}
-        except Exception as e:
-            self.report({'ERROR'}, f'❌ Cannot connect to {prefs.server_url}: {e}')
+        if server_is_alive(prefs.server_url):
+            self.report({'INFO'}, f'✅ Connected to {prefs.server_url}')
+            return {'FINISHED'}
+        self.report({'ERROR'}, f'❌ Cannot connect to {prefs.server_url}')
         return {'CANCELLED'}
+
+
+class BGRemover_OT_StartServer(bpy.types.Operator):
+    """Start the background removal server subprocess"""
+    bl_idname = 'bgremover.start_server'
+    bl_label = 'Start Server'
+
+    def execute(self, context):
+        prefs = get_prefs(context)
+        if server_is_alive(prefs.server_url):
+            self.report({'INFO'}, 'Server is already running.')
+            return {'FINISHED'}
+        try:
+            start_server(prefs)
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        self.report({'INFO'}, 'Server starting — watch server.log for progress.')
+        return {'FINISHED'}
+
+
+class BGRemover_OT_StopServer(bpy.types.Operator):
+    """Stop the background removal server subprocess"""
+    bl_idname = 'bgremover.stop_server'
+    bl_label = 'Stop Server'
+
+    def execute(self, context):
+        stop_server()
+        self.report({'INFO'}, 'Server stopped.')
+        return {'FINISHED'}
+
+
+def _process_with_server(prefs, png_bytes, filename, out_name):
+    """Synchronous helper: call server, load result into Blender."""
+    result_bytes = remove_bg_server(prefs.server_url, png_bytes, filename)
+    return png_bytes_to_blender_image(result_bytes, out_name)
 
 
 class BGRemover_OT_RemoveBackground(bpy.types.Operator):
@@ -357,6 +717,7 @@ class BGRemover_OT_RemoveBackground(bpy.types.Operator):
         prefs = get_prefs(context)
         image = context.area.spaces.active.image
         out_name = Path(image.name).stem + '_nobg'
+        area = context.area
 
         self.report({'INFO'}, f"Processing '{image.name}'…")
 
@@ -365,20 +726,36 @@ class BGRemover_OT_RemoveBackground(bpy.types.Operator):
                 pil_in = blender_image_to_pil(image)
                 pil_out = remove_bg_local(pil_in)
                 result_img = pil_to_blender_image(pil_out, out_name)
-            else:
-                png_bytes = blender_image_to_png_bytes(image)
-                result_bytes = remove_bg_server(prefs.server_url, png_bytes, image.name + '.png')
-                result_img = png_bytes_to_blender_image(result_bytes, out_name)
+                area.spaces.active.image = result_img
+                self.report({'INFO'}, f"Done! Saved as '{out_name}'")
+                return {'FINISHED'}
+
+            # SERVER mode: snapshot image bytes now, defer the POST until server is up
+            png_bytes = blender_image_to_png_bytes(image)
+
+            def _do_work():
+                try:
+                    result_img = _process_with_server(
+                        prefs, png_bytes, image.name + '.png', out_name
+                    )
+                    area.spaces.active.image = result_img
+                    print(f"[BG Remover] Done! Saved as '{out_name}'")
+                except Exception as e:
+                    print(f"[BG Remover] Error: {e}")
+
+            ensure_server_running_modal(context, self, _do_work)
+            # Whether the server was already up (work ran synchronously) or we
+            # kicked it off (work will run later via a timer), we return
+            # FINISHED — the operator has no more to do. Timer-driven completion
+            # messages go to the console (self.report is not reliable after
+            # operator exit).
+            return {'FINISHED'}
         except urllib.error.URLError as e:
             self.report({'ERROR'}, f"Cannot reach server: {e.reason}")
             return {'CANCELLED'}
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
-
-        context.area.spaces.active.image = result_img
-        self.report({'INFO'}, f"Done! Saved as '{out_name}'")
-        return {'FINISHED'}
 
 
 class BGRemover_OT_RemoveFromRender(bpy.types.Operator):
@@ -395,32 +772,45 @@ class BGRemover_OT_RemoveFromRender(bpy.types.Operator):
         prefs = get_prefs(context)
         render_img = bpy.data.images['Render Result']
         out_name = 'Render_nobg'
+        screen = context.screen
 
         self.report({'INFO'}, 'Processing render…')
+
+        def _show_result(result_img):
+            for area in screen.areas:
+                if area.type == 'IMAGE_EDITOR':
+                    area.spaces.active.image = result_img
+                    break
+
         try:
             if prefs.mode == 'LOCAL':
                 pil_in = blender_image_to_pil(render_img)
                 pil_out = remove_bg_local(pil_in)
                 result_img = pil_to_blender_image(pil_out, out_name)
-            else:
-                png_bytes = blender_image_to_png_bytes(render_img)
-                result_bytes = remove_bg_server(prefs.server_url, png_bytes, 'render.png')
-                result_img = png_bytes_to_blender_image(result_bytes, out_name)
+                _show_result(result_img)
+                self.report({'INFO'}, f"Done! Saved as '{out_name}'")
+                return {'FINISHED'}
+
+            png_bytes = blender_image_to_png_bytes(render_img)
+
+            def _do_work():
+                try:
+                    result_img = _process_with_server(
+                        prefs, png_bytes, 'render.png', out_name
+                    )
+                    _show_result(result_img)
+                    print(f"[BG Remover] Done! Saved as '{out_name}'")
+                except Exception as e:
+                    print(f"[BG Remover] Error: {e}")
+
+            ensure_server_running_modal(context, self, _do_work)
+            return {'FINISHED'}
         except urllib.error.URLError as e:
             self.report({'ERROR'}, f"Cannot reach server: {e.reason}")
             return {'CANCELLED'}
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
-
-        # Show result in whichever Image Editor is open
-        for area in context.screen.areas:
-            if area.type == 'IMAGE_EDITOR':
-                area.spaces.active.image = result_img
-                break
-
-        self.report({'INFO'}, f"Done! Saved as '{out_name}'")
-        return {'FINISHED'}
 
 
 class BGRemover_OT_ProcessSequence(bpy.types.Operator):
@@ -430,12 +820,10 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
     bl_options = {'REGISTER'}
 
     directory: bpy.props.StringProperty(
-        name='Input Folder',
-        subtype='DIR_PATH',
+        name='Input Folder', subtype='DIR_PATH',
     )
     output_dir: bpy.props.StringProperty(
-        name='Output Folder',
-        subtype='DIR_PATH',
+        name='Output Folder', subtype='DIR_PATH',
     )
 
     def invoke(self, context, event):
@@ -448,37 +836,50 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
         out = Path(self.output_dir) if self.output_dir else src.parent / (src.name + '_nobg')
         out.mkdir(parents=True, exist_ok=True)
 
-        frames = sorted([f for f in src.iterdir() if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.exr', '.tif')])
+        frames = sorted([
+            f for f in src.iterdir()
+            if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.exr', '.tif')
+        ])
         if not frames:
             self.report({'ERROR'}, 'No image files found in selected folder.')
             return {'CANCELLED'}
 
         self.report({'INFO'}, f'Processing {len(frames)} frames…')
+
+        def _run_batch():
+            try:
+                ensure_pillow()
+                from PIL import Image
+            except Exception as e:
+                print(f"[BG Remover] {e}")
+                return
+
+            for i, frame in enumerate(frames):
+                try:
+                    if prefs.mode == 'LOCAL':
+                        pil_in = Image.open(frame).convert('RGB')
+                        pil_out = remove_bg_local(pil_in)
+                        pil_out.save(out / (frame.stem + '_nobg.png'), 'PNG')
+                    else:
+                        with open(frame, 'rb') as f:
+                            raw = f.read()
+                        result = remove_bg_server(prefs.server_url, raw, frame.name)
+                        with open(out / (frame.stem + '_nobg.png'), 'wb') as f:
+                            f.write(result)
+                    print(f'[BG Remover] {i + 1}/{len(frames)} {frame.name}')
+                except Exception as e:
+                    print(f'[BG Remover] Skipped {frame.name}: {e}')
+            print(f'[BG Remover] ✅ Done! {len(frames)} frames saved to {out}')
+
         try:
-            ensure_pillow()
+            if prefs.mode == 'LOCAL':
+                _run_batch()
+            else:
+                ensure_server_running_modal(context, self, _run_batch)
+            return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
-        from PIL import Image
-
-        for i, frame in enumerate(frames):
-            try:
-                if prefs.mode == 'LOCAL':
-                    pil_in = Image.open(frame).convert('RGB')
-                    pil_out = remove_bg_local(pil_in)
-                    pil_out.save(out / (frame.stem + '_nobg.png'), 'PNG')
-                else:
-                    with open(frame, 'rb') as f:
-                        raw = f.read()
-                    result = remove_bg_server(prefs.server_url, raw, frame.name)
-                    with open(out / (frame.stem + '_nobg.png'), 'wb') as f:
-                        f.write(result)
-                print(f'[BG Remover] {i+1}/{len(frames)} {frame.name}')
-            except Exception as e:
-                self.report({'WARNING'}, f'Skipped {frame.name}: {e}')
-
-        self.report({'INFO'}, f'✅ Done! {len(frames)} frames saved to {out}')
-        return {'FINISHED'}
 
 
 # ── Panel ──────────────────────────────────────────────────────────────────────
@@ -494,14 +895,23 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         layout = self.layout
         prefs = get_prefs(context)
 
-        # Mode indicator
         row = layout.row()
         row.label(text='Mode:', icon='SETTINGS')
-        row.label(text='Local AI' if prefs.mode == 'LOCAL' else f'Server: {prefs.server_url}')
+        row.label(text='Local AI' if prefs.mode == 'LOCAL' else f'Server')
+
+        if prefs.mode == 'SERVER':
+            alive = server_is_alive(prefs.server_url, timeout=0.5)
+            subrow = layout.row()
+            if alive:
+                subrow.label(text=f'✅ Server up at {prefs.server_url}', icon='CHECKMARK')
+            elif _server_proc and _server_proc.poll() is None:
+                subrow.label(text='⏳ Server starting…', icon='TIME')
+            else:
+                subrow.label(text=f'Server stopped', icon='PAUSE')
 
         layout.separator()
 
-        # Pillow status check (needed in both modes)
+        # Pillow status (needed in both modes)
         try:
             import PIL  # noqa: F401
             pillow_ok = True
@@ -526,7 +936,6 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 
         layout.separator()
 
-        # Render result
         if bpy.data.images.get('Render Result'):
             layout.operator('bgremover.remove_from_render', icon='RENDER_STILL')
         else:
@@ -535,13 +944,10 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             row.operator('bgremover.remove_from_render', icon='RENDER_STILL')
 
         layout.separator()
-
-        # Batch sequence
         layout.operator('bgremover.process_sequence', icon='SEQUENCE')
 
         layout.separator()
 
-        # Model status (local mode)
         if prefs.mode == 'LOCAL':
             if _model is not None:
                 layout.label(text=f'✅ Model loaded ({_device.upper()})', icon='CHECKMARK')
@@ -556,6 +962,8 @@ classes = [
     BGRemoverPreferences,
     BGRemover_OT_InstallDeps,
     BGRemover_OT_TestConnection,
+    BGRemover_OT_StartServer,
+    BGRemover_OT_StopServer,
     BGRemover_OT_RemoveBackground,
     BGRemover_OT_RemoveFromRender,
     BGRemover_OT_ProcessSequence,
@@ -569,6 +977,7 @@ def register():
 
 
 def unregister():
+    stop_server()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
