@@ -19,7 +19,7 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (2, 0, 0),
+    "version": (2, 0, 1),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (local or server)",
@@ -30,9 +30,11 @@ import bpy
 import os
 import io
 import sys
+import site
 import math
 import struct
 import tempfile
+import importlib
 import subprocess
 import urllib.request
 import urllib.error
@@ -65,9 +67,9 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
         if self.mode == 'SERVER':
             layout.prop(self, "server_url")
             layout.operator("bgremover.test_connection", icon="LINKED")
-        else:
-            row = layout.row()
-            row.operator("bgremover.install_deps", icon="IMPORT")
+        # Pillow is needed in BOTH modes (for image I/O), so always show install button
+        row = layout.row()
+        row.operator("bgremover.install_deps", icon="IMPORT")
 
 
 # ── Globals ────────────────────────────────────────────────────────────────────
@@ -81,32 +83,96 @@ def get_prefs(context):
     return context.preferences.addons[__name__].preferences
 
 
+def _refresh_sys_path():
+    """Make newly pip-installed packages importable in the current Blender
+    session without requiring a restart."""
+    try:
+        for p in site.getsitepackages() + [site.getusersitepackages()]:
+            if p and p not in sys.path:
+                sys.path.append(p)
+        importlib.invalidate_caches()
+    except Exception as e:
+        print(f"[BG Remover] sys.path refresh warning: {e}")
+
+
+def ensure_pillow():
+    """Make sure Pillow (PIL) is importable. Install if missing.
+    Pillow is needed in BOTH local and server modes for image I/O.
+    Returns True on success, raises RuntimeError on failure."""
+    try:
+        import PIL  # noqa: F401
+        return True
+    except ImportError:
+        pass
+
+    python = sys.executable
+    # Make sure pip is available inside Blender's bundled Python
+    try:
+        subprocess.check_call(
+            [python, '-m', 'ensurepip', '--upgrade'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        )
+    except Exception:
+        # ensurepip may be disabled on some systems; that's OK if pip still works
+        pass
+
+    try:
+        subprocess.check_call(
+            [python, '-m', 'pip', 'install', '--upgrade', '--user', 'Pillow'],
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            "Failed to install Pillow. Try running Blender as Administrator "
+            "(Windows) or with sudo (Linux/macOS), then click 'Install AI "
+            f"Dependencies' again. Error: {e}"
+        )
+
+    _refresh_sys_path()
+
+    try:
+        import PIL  # noqa: F401
+    except ImportError as e:
+        raise RuntimeError(
+            "Pillow was installed but still can't be imported. Please restart "
+            f"Blender and try again. Error: {e}"
+        )
+    return True
+
+
 def ensure_deps():
-    """Install transformers + torch into Blender's Python if missing."""
+    """Install Pillow + torch + transformers + torchvision into Blender's
+    Python if missing. Pillow first (fast, always needed), then the heavy
+    AI libs."""
+    ensure_pillow()
+
     python = sys.executable
     missing = []
     try:
-        import torch
+        import torch  # noqa: F401
     except ImportError:
         missing.append('torch')
     try:
-        import transformers
+        import transformers  # noqa: F401
     except ImportError:
         missing.append('transformers')
     try:
-        import torchvision
+        import torchvision  # noqa: F401
     except ImportError:
         missing.append('torchvision')
-    try:
-        import PIL
-    except ImportError:
-        missing.append('Pillow')
 
     if missing:
-        subprocess.check_call(
-            [python, '-m', 'pip', 'install', '--upgrade'] + missing,
-            stdout=subprocess.DEVNULL
-        )
+        try:
+            subprocess.check_call(
+                [python, '-m', 'pip', 'install', '--upgrade', '--user'] + missing,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Failed to install {', '.join(missing)}. "
+                "Try running Blender as Administrator (Windows) or with sudo "
+                f"(Linux/macOS). Error: {e}"
+            )
+        _refresh_sys_path()
+
     return True
 
 
@@ -188,6 +254,7 @@ def remove_bg_server(server_url, png_bytes, filename):
 
 def blender_image_to_pil(image):
     """Convert a Blender image to a PIL RGB image via temp PNG."""
+    ensure_pillow()
     from PIL import Image
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
         tmp = tf.name
@@ -241,7 +308,7 @@ def png_bytes_to_blender_image(png_bytes, name):
 # ── Operators ─────────────────────────────────────────────────────────────────
 
 class BGRemover_OT_InstallDeps(bpy.types.Operator):
-    """Install required Python packages (torch, transformers) into Blender"""
+    """Install required Python packages (Pillow, torch, transformers) into Blender"""
     bl_idname = 'bgremover.install_deps'
     bl_label = 'Install AI Dependencies'
 
@@ -252,6 +319,7 @@ class BGRemover_OT_InstallDeps(bpy.types.Operator):
             self.report({'INFO'}, '✅ Dependencies installed! Model will load on first use.')
         except Exception as e:
             self.report({'ERROR'}, f'Install failed: {e}')
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -386,6 +454,11 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
             return {'CANCELLED'}
 
         self.report({'INFO'}, f'Processing {len(frames)} frames…')
+        try:
+            ensure_pillow()
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
         from PIL import Image
 
         for i, frame in enumerate(frames):
@@ -427,6 +500,20 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         row.label(text='Local AI' if prefs.mode == 'LOCAL' else f'Server: {prefs.server_url}')
 
         layout.separator()
+
+        # Pillow status check (needed in both modes)
+        try:
+            import PIL  # noqa: F401
+            pillow_ok = True
+        except ImportError:
+            pillow_ok = False
+
+        if not pillow_ok:
+            box = layout.box()
+            box.alert = True
+            box.label(text='Pillow not installed', icon='ERROR')
+            box.operator('bgremover.install_deps', icon='IMPORT')
+            return
 
         # Active image
         space = context.area.spaces.active if context.area else None
