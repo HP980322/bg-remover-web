@@ -8,19 +8,12 @@
 #   2. SERVER — sends images to bg_remover_server.py
 #               If not running, the addon will auto-start it
 #               using your system Python + ship an isolated venv.
-#
-# Installation:
-#   Edit > Preferences > Add-ons > Install > select this file
-#   Enable "Image: BG Remover"
-#
-# Usage:
-#   Image Editor > N-panel > BG Remover tab
 # ============================================================
 
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (2, 1, 1),
+    "version": (2, 1, 2),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (local or auto-managed server)",
@@ -50,18 +43,28 @@ SERVER_SCRIPT_URL = (
     "main/blender/bg_remover_server.py"
 )
 
-# Packages the server needs in its own venv. Kept in sync with
-# blender/requirements.txt in the repo.
-SERVER_REQUIREMENTS = [
+# Lightweight deps — plain PyPI.
+SERVER_REQS_LIGHT = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "python-multipart>=0.0.9",
     "Pillow>=10.0",
-    "numpy>=1.24",
-    "torch>=2.0",
-    "torchvision>=0.15",
+    "numpy>=1.24,<2.0",   # torch 2.2 is happier with numpy<2
     "transformers>=4.40",
 ]
+
+# Torch stack — installed from the official PyTorch wheel index, which has
+# much broader Python-version coverage than PyPI. CPU wheels are ~200 MB.
+# For GPU support the user can pre-install their preferred torch build
+# and we'll skip reinstalling.
+PYTORCH_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+SERVER_REQS_TORCH = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+]
+
+MIN_PY = (3, 9)
+MAX_PY_HINT = (3, 12)  # Versions above this often lack torch wheels
 
 
 # ── Preferences ───────────────────────────────────────────────────────────────
@@ -90,7 +93,7 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
     system_python: bpy.props.StringProperty(
         name="System Python",
         default="",
-        description="Path to a Python 3.10+ executable used to run the server. Leave blank to auto-detect (uses 'python' on PATH).",
+        description="Path to a Python 3.9–3.12 executable used to run the server. Leave blank to auto-detect.",
         subtype='FILE_PATH',
     )
     server_script_path: bpy.props.StringProperty(
@@ -113,14 +116,15 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
                 col = box.column(align=True)
                 col.prop(self, "system_python")
                 col.prop(self, "server_script_path")
-                col.label(text="First start downloads ~2GB of deps — be patient.", icon='INFO')
+                col.label(text="First start installs ~2GB of deps — be patient.", icon='INFO')
+                col.label(text="Python 3.11 or 3.12 recommended (torch wheels).", icon='INFO')
 
             row = box.row(align=True)
             row.operator("bgremover.test_connection", icon="LINKED")
             row.operator("bgremover.start_server", icon="PLAY")
             row.operator("bgremover.stop_server", icon="PAUSE")
+            row.operator("bgremover.open_log", icon="TEXT")
 
-        # Pillow is needed in BOTH modes (for image I/O)
         row = layout.row()
         row.operator("bgremover.install_deps", icon="IMPORT")
 
@@ -131,12 +135,11 @@ _model = None
 _processor = None
 _device = 'cpu'
 
-# Auto-started server subprocess state
-_server_proc = None           # subprocess.Popen instance
-_server_log_path = None       # log file path
-_server_workdir = None        # working dir for the subprocess
-_server_venv_python = None    # python inside the venv we set up
-_server_last_error = None     # last startup error (shown in panel)
+_server_proc = None
+_server_log_path = None
+_server_workdir = None
+_server_venv_python = None
+_server_last_error = None
 
 
 def get_prefs(context):
@@ -144,33 +147,65 @@ def get_prefs(context):
 
 
 def _addon_data_dir():
-    """Per-user data dir where we stash the venv, logs, and downloaded server script."""
     base = Path(bpy.utils.user_resource('SCRIPTS', path='addons'))
     d = base / 'bg_remover_data'
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
+def _log_path():
+    global _server_log_path
+    if _server_log_path is None:
+        _server_log_path = _addon_data_dir() / 'server.log'
+    return _server_log_path
+
+
+def _log(msg):
+    """Append a line to server.log and also print to Blender's console."""
+    print(f"[BG Remover] {msg}")
+    try:
+        with open(_log_path(), 'a', encoding='utf-8') as f:
+            f.write(f"[addon] {msg}\n")
+    except Exception:
+        pass
+
+
+def _run_logged(cmd, **kw):
+    """Run a subprocess, stream stdout+stderr into server.log, and raise
+    CalledProcessError with a useful message (including the log tail) on failure."""
+    _log(f"$ {' '.join(str(c) for c in cmd)}")
+    with open(_log_path(), 'ab', buffering=0) as log_fh:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            **kw,
+        )
+        rc = proc.wait()
+    if rc != 0:
+        tail = _read_log_tail(1500)
+        raise subprocess.CalledProcessError(
+            rc, cmd, output=tail,
+        )
+
+
 def _refresh_sys_path():
-    """Make newly pip-installed packages importable in the current Blender
-    session without requiring a restart."""
     try:
         for p in site.getsitepackages() + [site.getusersitepackages()]:
             if p and p not in sys.path:
                 sys.path.append(p)
         importlib.invalidate_caches()
     except Exception as e:
-        print(f"[BG Remover] sys.path refresh warning: {e}")
+        _log(f"sys.path refresh warning: {e}")
 
 
 def ensure_pillow():
-    """Make sure Pillow (PIL) is importable in Blender's Python. Install if missing."""
+    """Make sure Pillow is importable in Blender's own Python (for image I/O)."""
     try:
         import PIL  # noqa: F401
         return True
     except ImportError:
         pass
-
     python = sys.executable
     try:
         subprocess.check_call(
@@ -179,35 +214,26 @@ def ensure_pillow():
         )
     except Exception:
         pass
-
     try:
         subprocess.check_call(
             [python, '-m', 'pip', 'install', '--upgrade', '--user', 'Pillow'],
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
-            "Failed to install Pillow. Try running Blender as Administrator "
-            "(Windows) or with sudo (Linux/macOS). "
-            f"Error: {e}"
+            "Failed to install Pillow into Blender's Python. Try running "
+            f"Blender as Administrator (Windows) / with sudo (Unix). Error: {e}"
         )
-
     _refresh_sys_path()
-
     try:
         import PIL  # noqa: F401
     except ImportError as e:
-        raise RuntimeError(
-            "Pillow was installed but still can't be imported. Please restart "
-            f"Blender and try again. Error: {e}"
-        )
+        raise RuntimeError(f"Pillow installed but not importable: {e}")
     return True
 
 
 def ensure_deps():
-    """Install Pillow + torch + transformers + torchvision into Blender's Python
-    (for LOCAL mode). Pillow first, then the heavy AI libs."""
+    """LOCAL mode only: install torch + transformers + torchvision into Blender's Python."""
     ensure_pillow()
-
     python = sys.executable
     missing = []
     try:
@@ -222,7 +248,6 @@ def ensure_deps():
         import torchvision  # noqa: F401
     except ImportError:
         missing.append('torchvision')
-
     if missing:
         try:
             subprocess.check_call(
@@ -230,12 +255,9 @@ def ensure_deps():
             )
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
-                f"Failed to install {', '.join(missing)}. "
-                "Try running Blender as Administrator (Windows) or with sudo "
-                f"(Linux/macOS). Error: {e}"
+                f"Failed to install {', '.join(missing)} into Blender's Python. {e}"
             )
         _refresh_sys_path()
-
     return True
 
 
@@ -248,7 +270,6 @@ def load_model():
         import torch
         from transformers import AutoModelForImageSegmentation
         from torchvision import transforms
-
         _device = 'cuda' if torch.cuda.is_available() else 'cpu'
         _model = AutoModelForImageSegmentation.from_pretrained(
             'briaai/RMBG-1.4', trust_remote_code=True
@@ -261,48 +282,38 @@ def load_model():
         ])
         return True
     except Exception as e:
-        print(f"[BG Remover] Model load failed: {e}")
+        _log(f"Model load failed: {e}")
         return False
 
 
-# ── Local inference ───────────────────────────────────────────────────────────
+# ── Inference helpers ─────────────────────────────────────────────────────────
 
 def remove_bg_local(pil_img):
-    """Run RMBG-1.4 on a PIL RGB image, return RGBA PIL image."""
     if not load_model():
-        raise RuntimeError("Could not load RMBG-1.4 model. Check console for details.")
-
+        raise RuntimeError("Could not load RMBG-1.4 model. Check console.")
     import torch
     import numpy as np
     from PIL import Image
-
     W, H = pil_img.size
     rgb = pil_img.convert('RGB')
     inp = _processor(rgb).unsqueeze(0).to(_device)
-
     with torch.no_grad():
         result = _model(inp)
-
     mask = result[0][0].squeeze().cpu().numpy()
     mask = (mask * 255).clip(0, 255).astype('uint8')
     mask_img = Image.fromarray(mask).resize((W, H), Image.BILINEAR)
-
     out = np.array(rgb.convert('RGBA'))
     out[:, :, 3] = np.array(mask_img)
     return Image.fromarray(out, 'RGBA')
 
 
-# ── Server client ─────────────────────────────────────────────────────────────
-
 def remove_bg_server(server_url, png_bytes, filename):
-    """POST image to /remove-bg/image, return PNG bytes."""
     boundary = '----BGRemoverBlender'
     body = (
         f'--{boundary}\r\n'
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         f'Content-Type: image/png\r\n\r\n'
     ).encode() + png_bytes + f'\r\n--{boundary}--\r\n'.encode()
-
     req = urllib.request.Request(
         f"{server_url}/remove-bg/image",
         data=body,
@@ -314,7 +325,6 @@ def remove_bg_server(server_url, png_bytes, filename):
 
 
 def server_is_alive(server_url, timeout=2):
-    """Quick health check. Returns True if server responds OK."""
     try:
         req = urllib.request.Request(f"{server_url}/health", method='GET')
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -329,8 +339,22 @@ def _is_localhost_url(url):
 
 # ── Server manager ────────────────────────────────────────────────────────────
 
+def _python_version(py):
+    """Return (major, minor) for a Python executable, or None."""
+    try:
+        out = subprocess.run(
+            [py, '-c', 'import sys; print(sys.version_info[0], sys.version_info[1])'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode == 0:
+            parts = out.stdout.strip().split()
+            return (int(parts[0]), int(parts[1]))
+    except Exception:
+        pass
+    return None
+
+
 def _resolve_system_python(prefs):
-    """Find a usable Python 3 outside of Blender's bundle."""
     candidates = []
     if prefs.system_python:
         candidates.append(prefs.system_python)
@@ -338,6 +362,12 @@ def _resolve_system_python(prefs):
         p = shutil.which(name)
         if p:
             candidates.append(p)
+    # Also look in py launcher variants on Windows
+    if os.name == 'nt':
+        for v in ('3.12', '3.11', '3.10', '3.9'):
+            p = shutil.which(f'py -{v}')
+            if p:
+                candidates.append(p)
 
     blender_py = Path(sys.executable).resolve()
     for c in candidates:
@@ -348,51 +378,46 @@ def _resolve_system_python(prefs):
                 continue
         except Exception:
             pass
-        try:
-            out = subprocess.run(
-                [c, '-c', 'import sys; print(sys.version_info[:2])'],
-                capture_output=True, text=True, timeout=10,
-            )
-            if out.returncode == 0:
-                return c
-        except Exception:
-            continue
-    return None
+        ver = _python_version(c)
+        if ver and ver >= MIN_PY:
+            return c, ver
+    return None, None
 
 
 def _ensure_server_script(prefs):
-    """Return a path to bg_remover_server.py, downloading it if needed."""
     if prefs.server_script_path:
         p = Path(prefs.server_script_path)
         if p.is_file():
             return p
-
     here = Path(__file__).parent
     sibling = here / 'bg_remover_server.py'
     if sibling.is_file():
         return sibling
-
     data = _addon_data_dir()
     cached = data / 'bg_remover_server.py'
     if cached.is_file():
         return cached
-
-    print(f"[BG Remover] Downloading server script from {SERVER_SCRIPT_URL}")
+    _log(f"Downloading server script from {SERVER_SCRIPT_URL}")
     try:
         with urllib.request.urlopen(SERVER_SCRIPT_URL, timeout=30) as resp:
             cached.write_bytes(resp.read())
     except Exception as e:
         raise RuntimeError(
             f"Could not download server script: {e}\n"
-            "Either check your internet connection, or download "
-            f"{SERVER_SCRIPT_URL} manually and point the 'Server Script' "
-            "preference at it."
+            f"Download {SERVER_SCRIPT_URL} manually and set 'Server Script' in preferences."
         )
     return cached
 
 
-def _ensure_server_venv(system_python):
-    """Create (once) a venv next to the addon and install server deps into it."""
+def _ensure_server_venv(system_python, sys_py_ver):
+    """Create a venv (once) and install server deps into it.
+    Returns the path to python inside the venv.
+
+    Install strategy:
+      1. Upgrade pip in the venv
+      2. Install light deps (fastapi, transformers, Pillow, numpy) from PyPI
+      3. Install torch + torchvision from the PyTorch wheel index
+         (much broader wheel coverage than PyPI)"""
     global _server_venv_python
 
     venv_dir = _addon_data_dir() / 'venv'
@@ -402,22 +427,74 @@ def _ensure_server_venv(system_python):
         venv_python = venv_dir / 'bin' / 'python'
 
     if not venv_python.is_file():
-        print(f"[BG Remover] Creating venv at {venv_dir}")
-        subprocess.check_call([system_python, '-m', 'venv', str(venv_dir)])
+        _log(f"Creating venv at {venv_dir}")
+        _run_logged([system_python, '-m', 'venv', str(venv_dir)])
 
+    # Are all deps already importable? Skip install if so.
     probe = subprocess.run(
         [str(venv_python), '-c',
-         'import fastapi, uvicorn, torch, transformers, torchvision, PIL; print("ok")'],
+         'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; print("ok")'],
+        capture_output=True, text=True,
+    )
+    if probe.returncode == 0:
+        _server_venv_python = str(venv_python)
+        return _server_venv_python
+
+    _log("Installing server dependencies — this can take several minutes.")
+
+    # Step 1: pip upgrade
+    try:
+        _run_logged([str(venv_python), '-m', 'pip', 'install', '--upgrade', 'pip'])
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"Failed to upgrade pip in the venv.\n"
+            f"Log tail:\n{(e.output or '')[-1200:]}"
+        )
+
+    # Step 2: light deps from PyPI
+    try:
+        _run_logged(
+            [str(venv_python), '-m', 'pip', 'install', '--upgrade'] + SERVER_REQS_LIGHT
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            "pip install of fastapi/transformers/Pillow/numpy failed. "
+            f"Log tail:\n{(e.output or '')[-1200:]}"
+        )
+
+    # Step 3: torch + torchvision from PyTorch index
+    try:
+        _run_logged(
+            [str(venv_python), '-m', 'pip', 'install',
+             '--index-url', PYTORCH_INDEX_URL] + SERVER_REQS_TORCH
+        )
+    except subprocess.CalledProcessError as e:
+        hint = ""
+        if sys_py_ver and sys_py_ver > MAX_PY_HINT:
+            hint = (
+                f"\n\nHINT: You're using Python {sys_py_ver[0]}.{sys_py_ver[1]}, "
+                f"which often lacks PyTorch wheels. Install Python 3.11 or 3.12 "
+                f"from https://www.python.org/downloads/ and set the 'System Python' "
+                f"preference to its python.exe path."
+            )
+        raise RuntimeError(
+            "pip install of torch/torchvision failed — this is the most common "
+            "failure mode. Check that your system Python has available wheels.\n\n"
+            f"Log tail:\n{(e.output or '')[-1200:]}"
+            f"{hint}"
+        )
+
+    # Final probe
+    probe = subprocess.run(
+        [str(venv_python), '-c',
+         'import fastapi, uvicorn, torch, transformers, torchvision, PIL, numpy; print("ok")'],
         capture_output=True, text=True,
     )
     if probe.returncode != 0:
-        print("[BG Remover] Installing server dependencies (this can take a while)…")
-        subprocess.check_call(
-            [str(venv_python), '-m', 'pip', 'install', '--upgrade', 'pip'],
+        raise RuntimeError(
+            f"Deps installed but not all importable. stderr:\n{probe.stderr[-800:]}"
         )
-        subprocess.check_call(
-            [str(venv_python), '-m', 'pip', 'install'] + SERVER_REQUIREMENTS,
-        )
+
     _server_venv_python = str(venv_python)
     return _server_venv_python
 
@@ -430,34 +507,30 @@ def _port_from_url(url):
 
 
 def start_server(prefs):
-    """Launch bg_remover_server.py as a background subprocess.
-    Returns immediately; caller polls server_is_alive()."""
-    global _server_proc, _server_log_path, _server_workdir, _server_last_error
+    global _server_proc, _server_workdir, _server_last_error
     _server_last_error = None
 
     if not _is_localhost_url(prefs.server_url):
         raise RuntimeError(
-            f"Auto-start only works for local URLs. {prefs.server_url} looks "
-            "remote — start that server manually on its machine."
+            f"Auto-start only works for local URLs. {prefs.server_url} looks remote."
         )
-
     if _server_proc and _server_proc.poll() is None:
-        return  # already running
+        return
 
-    system_python = _resolve_system_python(prefs)
+    system_python, sys_py_ver = _resolve_system_python(prefs)
     if not system_python:
         raise RuntimeError(
-            "No usable system Python found. Install Python 3.10+ from "
-            "python.org, or set 'System Python' in addon preferences."
+            "No system Python 3.9+ found on PATH. Install Python 3.11 or 3.12 "
+            "from https://www.python.org/downloads/ (tick 'Add to PATH' during "
+            "install), then restart Blender. Or set 'System Python' in addon "
+            "preferences."
         )
+    _log(f"Using system Python {sys_py_ver[0]}.{sys_py_ver[1]} at {system_python}")
 
     script = _ensure_server_script(prefs)
-    venv_python = _ensure_server_venv(system_python)
+    venv_python = _ensure_server_venv(system_python, sys_py_ver)
 
-    data = _addon_data_dir()
-    _server_log_path = data / 'server.log'
     _server_workdir = script.parent
-
     port = _port_from_url(prefs.server_url)
     env = os.environ.copy()
     env['BG_REMOVER_PORT'] = str(port)
@@ -467,8 +540,8 @@ def start_server(prefs):
     if os.name == 'nt':
         creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
 
-    log_fh = open(_server_log_path, 'ab', buffering=0)
-    print(f"[BG Remover] Launching server: {venv_python} {script} (port {port})")
+    log_fh = open(_log_path(), 'ab', buffering=0)
+    _log(f"Launching server: {venv_python} {script} (port {port})")
     _server_proc = subprocess.Popen(
         [venv_python, str(script)],
         cwd=str(_server_workdir),
@@ -489,7 +562,7 @@ def stop_server():
             except subprocess.TimeoutExpired:
                 _server_proc.kill()
         except Exception as e:
-            print(f"[BG Remover] Error stopping server: {e}")
+            _log(f"Error stopping server: {e}")
     _server_proc = None
 
 
@@ -497,11 +570,11 @@ atexit.register(stop_server)
 
 
 def _read_log_tail(n=800):
-    """Read the last n bytes of server.log, decoded."""
     try:
-        if _server_log_path and _server_log_path.exists():
-            with open(_server_log_path, 'rb') as f:
-                f.seek(max(0, _server_log_path.stat().st_size - n * 2))
+        lp = _log_path()
+        if lp.exists():
+            with open(lp, 'rb') as f:
+                f.seek(max(0, lp.stat().st_size - n * 2))
                 return f.read().decode('utf-8', errors='replace')[-n:]
     except Exception:
         pass
@@ -509,11 +582,6 @@ def _read_log_tail(n=800):
 
 
 def ensure_server_running_modal(context, operator, on_ready):
-    """Kick off the server if needed, then run on_ready() when /health responds.
-    Uses a Blender timer so the UI stays responsive.
-
-    - If server already alive → calls on_ready() immediately (returns True).
-    - Otherwise starts server + registers timer; returns False."""
     global _server_last_error
     prefs = get_prefs(context)
 
@@ -522,15 +590,9 @@ def ensure_server_running_modal(context, operator, on_ready):
         return True
 
     if not prefs.auto_start_server:
-        raise RuntimeError(
-            f"Server at {prefs.server_url} is not running and auto-start is off."
-        )
-
+        raise RuntimeError(f"Server at {prefs.server_url} is not running and auto-start is off.")
     if not _is_localhost_url(prefs.server_url):
-        raise RuntimeError(
-            f"Cannot auto-start a remote server ({prefs.server_url}). "
-            "Start it manually, or use LOCAL mode."
-        )
+        raise RuntimeError(f"Cannot auto-start a remote server ({prefs.server_url}).")
 
     try:
         start_server(prefs)
@@ -543,23 +605,20 @@ def ensure_server_running_modal(context, operator, on_ready):
     def _poll():
         global _server_last_error
         if _server_proc is None or _server_proc.poll() is not None:
-            tail = _read_log_tail()
-            msg = f"Server process exited. Log tail:\n{tail[-500:]}"
+            tail = _read_log_tail(1000)
+            msg = f"Server process exited. See log for details.\n{tail[-500:]}"
             _server_last_error = msg
             operator.report({'ERROR'}, msg)
             return None
-
         if server_is_alive(prefs.server_url, timeout=1):
             try:
                 on_ready()
             except Exception as e:
                 operator.report({'ERROR'}, f"Post-startup call failed: {e}")
             return None
-
         deadline['t'] += 2.0
         if deadline['t'] >= deadline['max']:
-            msg = (f"Server didn't become ready within {int(deadline['max'])}s. "
-                   f"Check {_server_log_path}")
+            msg = f"Server didn't become ready within {int(deadline['max'])}s. Check {_log_path()}"
             _server_last_error = msg
             operator.report({'ERROR'}, msg)
             return None
@@ -568,8 +627,8 @@ def ensure_server_running_modal(context, operator, on_ready):
     bpy.app.timers.register(_poll, first_interval=2.0)
     operator.report(
         {'INFO'},
-        "Starting server — first run installs deps + downloads model "
-        "(~2GB, can take several minutes)."
+        "Starting server — installing deps + downloading model (~2GB). "
+        "Click 'Open Log' to watch progress."
     )
     return False
 
@@ -628,8 +687,7 @@ def png_bytes_to_blender_image(png_bytes, name):
 # ── Operators ─────────────────────────────────────────────────────────────────
 
 class BGRemover_OT_InstallDeps(bpy.types.Operator):
-    """Install required Python packages into Blender (Pillow, torch, transformers).
-    Only needed for LOCAL mode. SERVER mode installs its own deps in a venv."""
+    """Install AI packages into Blender's Python (LOCAL mode only)"""
     bl_idname = 'bgremover.install_deps'
     bl_label = 'Install AI Dependencies'
 
@@ -645,19 +703,15 @@ class BGRemover_OT_InstallDeps(bpy.types.Operator):
 
 
 class BGRemover_OT_TestConnection(bpy.types.Operator):
-    """Check the server. If it's down and auto-start is on, the server
-    will be launched — no need to click Remove Background first."""
+    """Check the server. If it's down and auto-start is on, launch it."""
     bl_idname = 'bgremover.test_connection'
     bl_label = 'Test Connection'
 
     def execute(self, context):
         prefs = get_prefs(context)
-
         if server_is_alive(prefs.server_url):
             self.report({'INFO'}, f'✅ Connected to {prefs.server_url}')
             return {'FINISHED'}
-
-        # Server isn't up. If auto-start is on and the URL is local, kick it off.
         if prefs.auto_start_server and _is_localhost_url(prefs.server_url):
             def _done():
                 print(f"[BG Remover] ✅ Server is up at {prefs.server_url}")
@@ -667,7 +721,6 @@ class BGRemover_OT_TestConnection(bpy.types.Operator):
             except Exception as e:
                 self.report({'ERROR'}, f'Auto-start failed: {e}')
                 return {'CANCELLED'}
-
         self.report({'ERROR'}, f'❌ Cannot connect to {prefs.server_url}')
         return {'CANCELLED'}
 
@@ -687,7 +740,7 @@ class BGRemover_OT_StartServer(bpy.types.Operator):
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
-        self.report({'INFO'}, 'Server starting — watch server.log for progress.')
+        self.report({'INFO'}, 'Server starting — click Open Log to watch.')
         return {'FINISHED'}
 
 
@@ -708,10 +761,9 @@ class BGRemover_OT_OpenLog(bpy.types.Operator):
     bl_label = 'Open Server Log'
 
     def execute(self, context):
-        data = _addon_data_dir()
-        log = data / 'server.log'
+        log = _log_path()
         if not log.exists():
-            self.report({'WARNING'}, 'No server.log yet — server has not been started.')
+            self.report({'WARNING'}, 'No server.log yet.')
             return {'CANCELLED'}
         try:
             if os.name == 'nt':
@@ -720,7 +772,6 @@ class BGRemover_OT_OpenLog(bpy.types.Operator):
                 subprocess.Popen(['open', str(log)])
             else:
                 subprocess.Popen(['xdg-open', str(log)])
-            self.report({'INFO'}, f'Opened {log}')
         except Exception as e:
             self.report({'ERROR'}, f'Could not open log: {e}')
             return {'CANCELLED'}
@@ -728,7 +779,6 @@ class BGRemover_OT_OpenLog(bpy.types.Operator):
 
 
 def _process_with_server(prefs, png_bytes, filename, out_name):
-    """Synchronous: call server, load result into Blender."""
     result_bytes = remove_bg_server(prefs.server_url, png_bytes, filename)
     return png_bytes_to_blender_image(result_bytes, out_name)
 
@@ -750,9 +800,7 @@ class BGRemover_OT_RemoveBackground(bpy.types.Operator):
         image = context.area.spaces.active.image
         out_name = Path(image.name).stem + '_nobg'
         area = context.area
-
         self.report({'INFO'}, f"Processing '{image.name}'…")
-
         try:
             if prefs.mode == 'LOCAL':
                 pil_in = blender_image_to_pil(image)
@@ -761,20 +809,14 @@ class BGRemover_OT_RemoveBackground(bpy.types.Operator):
                 area.spaces.active.image = result_img
                 self.report({'INFO'}, f"Done! Saved as '{out_name}'")
                 return {'FINISHED'}
-
-            # SERVER mode: snapshot image bytes, defer POST until server is up
             png_bytes = blender_image_to_png_bytes(image)
-
             def _do_work():
                 try:
-                    result_img = _process_with_server(
-                        prefs, png_bytes, image.name + '.png', out_name
-                    )
+                    result_img = _process_with_server(prefs, png_bytes, image.name + '.png', out_name)
                     area.spaces.active.image = result_img
                     print(f"[BG Remover] Done! Saved as '{out_name}'")
                 except Exception as e:
                     print(f"[BG Remover] Error: {e}")
-
             ensure_server_running_modal(context, self, _do_work)
             return {'FINISHED'}
         except urllib.error.URLError as e:
@@ -800,15 +842,12 @@ class BGRemover_OT_RemoveFromRender(bpy.types.Operator):
         render_img = bpy.data.images['Render Result']
         out_name = 'Render_nobg'
         screen = context.screen
-
         self.report({'INFO'}, 'Processing render…')
-
         def _show_result(result_img):
             for area in screen.areas:
                 if area.type == 'IMAGE_EDITOR':
                     area.spaces.active.image = result_img
                     break
-
         try:
             if prefs.mode == 'LOCAL':
                 pil_in = blender_image_to_pil(render_img)
@@ -817,19 +856,14 @@ class BGRemover_OT_RemoveFromRender(bpy.types.Operator):
                 _show_result(result_img)
                 self.report({'INFO'}, f"Done! Saved as '{out_name}'")
                 return {'FINISHED'}
-
             png_bytes = blender_image_to_png_bytes(render_img)
-
             def _do_work():
                 try:
-                    result_img = _process_with_server(
-                        prefs, png_bytes, 'render.png', out_name
-                    )
+                    result_img = _process_with_server(prefs, png_bytes, 'render.png', out_name)
                     _show_result(result_img)
                     print(f"[BG Remover] Done! Saved as '{out_name}'")
                 except Exception as e:
                     print(f"[BG Remover] Error: {e}")
-
             ensure_server_running_modal(context, self, _do_work)
             return {'FINISHED'}
         except urllib.error.URLError as e:
@@ -858,17 +892,14 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
         src = Path(self.directory)
         out = Path(self.output_dir) if self.output_dir else src.parent / (src.name + '_nobg')
         out.mkdir(parents=True, exist_ok=True)
-
         frames = sorted([
             f for f in src.iterdir()
             if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.exr', '.tif')
         ])
         if not frames:
-            self.report({'ERROR'}, 'No image files found in selected folder.')
+            self.report({'ERROR'}, 'No image files found.')
             return {'CANCELLED'}
-
         self.report({'INFO'}, f'Processing {len(frames)} frames…')
-
         def _run_batch():
             try:
                 ensure_pillow()
@@ -876,7 +907,6 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
             except Exception as e:
                 print(f"[BG Remover] {e}")
                 return
-
             for i, frame in enumerate(frames):
                 try:
                     if prefs.mode == 'LOCAL':
@@ -892,8 +922,7 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
                     print(f'[BG Remover] {i + 1}/{len(frames)} {frame.name}')
                 except Exception as e:
                     print(f'[BG Remover] Skipped {frame.name}: {e}')
-            print(f'[BG Remover] ✅ Done! {len(frames)} frames saved to {out}')
-
+            print(f'[BG Remover] ✅ Done! {len(frames)} frames -> {out}')
         try:
             if prefs.mode == 'LOCAL':
                 _run_batch()
@@ -918,33 +947,28 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         layout = self.layout
         prefs = get_prefs(context)
 
-        # Mode indicator
         row = layout.row()
         row.label(text='Mode:', icon='SETTINGS')
         row.label(text='Local AI' if prefs.mode == 'LOCAL' else 'Server')
 
-        # Server status + controls (visible in SERVER mode)
         if prefs.mode == 'SERVER':
             alive = server_is_alive(prefs.server_url, timeout=0.5)
             starting = (_server_proc is not None and _server_proc.poll() is None and not alive)
-
             box = layout.box()
             status_row = box.row()
             if alive:
-                status_row.label(text=f'✅ Server running', icon='CHECKMARK')
+                status_row.label(text='✅ Server running', icon='CHECKMARK')
             elif starting:
                 status_row.label(text='⏳ Server starting…', icon='TIME')
             else:
                 status_row.label(text='Server is not running', icon='PAUSE')
 
-            # Show the most recent startup error (if any) prominently
             if _server_last_error and not alive and not starting:
                 err_box = box.box()
                 err_box.alert = True
-                # First line of the error is usually the useful one
                 first_line = _server_last_error.strip().splitlines()[0][:80]
-                err_box.label(text=f"Last error: {first_line}", icon='ERROR')
-                err_box.operator('bgremover.open_log', icon='TEXT')
+                err_box.label(text=f"Error: {first_line}", icon='ERROR')
+                err_box.operator('bgremover.open_log', text='Open Full Log', icon='TEXT')
 
             ctl_row = box.row(align=True)
             if alive or starting:
@@ -956,13 +980,11 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 
         layout.separator()
 
-        # Pillow status (needed in both modes)
         try:
             import PIL  # noqa: F401
             pillow_ok = True
         except ImportError:
             pillow_ok = False
-
         if not pillow_ok:
             box = layout.box()
             box.alert = True
@@ -970,7 +992,6 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             box.operator('bgremover.install_deps', icon='IMPORT')
             return
 
-        # Active image
         space = context.area.spaces.active if context.area else None
         if space and space.image:
             box = layout.box()
@@ -980,7 +1001,6 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             layout.label(text='Open an image first', icon='INFO')
 
         layout.separator()
-
         if bpy.data.images.get('Render Result'):
             layout.operator('bgremover.remove_from_render', icon='RENDER_STILL')
         else:
@@ -992,7 +1012,6 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         layout.operator('bgremover.process_sequence', icon='SEQUENCE')
 
         layout.separator()
-
         if prefs.mode == 'LOCAL':
             if _model is not None:
                 layout.label(text=f'✅ Model loaded ({_device.upper()})', icon='CHECKMARK')
