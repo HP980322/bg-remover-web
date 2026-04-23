@@ -5,29 +5,20 @@
 # Produces alpha masks byte-identical to the web version at
 # https://hp980322.github.io/bg-remover-web/ — the same RMBG-1.4
 # model, the same preprocessing, and the same cleanMask v16
-# post-processing (K-means background modeling, sky handling,
-# morphological closing, body-color growth, thin-stripe removal,
-# and edge anti-aliasing).
+# post-processing.
 #
 # Runs entirely inside Blender's bundled Python via ONNX Runtime.
 # No system Python, no venv, no torch, no transformers. Just works.
 #
-# On first use the addon installs onnxruntime + numpy + scipy + Pillow
-# into Blender's Python (~150 MB of wheels) and downloads the
-# RMBG-1.4 ONNX model (~176 MB, cached forever).
-#
-# Installation:
-#   Edit > Preferences > Add-ons > Install > select this file
-#   Enable "Image: BG Remover"
-#
-# Usage:
-#   Image Editor > N-panel > BG Remover tab
+# On first use the addon installs onnxruntime==1.20.1 + numpy + scipy
+# + Pillow into Blender's Python and downloads the RMBG-1.4 ONNX
+# model (~176 MB, cached forever).
 # ============================================================
 
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (3, 1, 1),
+    "version": (3, 1, 2),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (ONNX Runtime, web-parity cleanMask)",
@@ -53,9 +44,16 @@ MODEL_URL = "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx
 MODEL_FILENAME = "rmbg_1_4.onnx"
 MODEL_INPUT_SIZE = 1024
 
-# scipy is needed for cleanMask (connected components + morphology).
-# Wheels available for Python 3.7 through 3.14 on all major platforms.
-REQUIRED_PACKAGES = ["onnxruntime", "numpy", "scipy", "Pillow"]
+# onnxruntime pinned to 1.20.1 — the last version before the DLL-loading
+# regression that appeared in 1.22.x (and lingering issues in 1.21.x).
+# See microsoft/onnxruntime issues #24907, #21270: 1.22+ no longer
+# searches PATH for runtime DLLs and fails to init with
+# "A dynamic link library (DLL) initialization routine failed"
+# even with the latest VC++ redist installed.
+ONNXRUNTIME_SPEC = "onnxruntime==1.20.1"
+
+# scipy/numpy/Pillow don't need pinning — any recent version works.
+REQUIRED_PACKAGES_UNPINNED = ["numpy", "scipy", "Pillow"]
 
 VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
@@ -65,7 +63,7 @@ VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 _session = None
 _session_provider = None
 _last_error = None
-_last_error_detail = None   # full multiline text for the console
+_last_error_detail = None
 
 
 # ── Addon Preferences ─────────────────────────────────────────────────────────
@@ -96,7 +94,7 @@ def get_prefs(context=None):
         return None
 
 
-# ── Setup: data dir, model download, pip install ──────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 
 def _addon_data_dir():
     base = Path(bpy.utils.user_resource('SCRIPTS', path='addons'))
@@ -109,6 +107,20 @@ def _model_path():
     return _addon_data_dir() / MODEL_FILENAME
 
 
+def _diagnostics_path():
+    return _addon_data_dir() / 'diagnostics.txt'
+
+
+# ── Subprocess helpers ────────────────────────────────────────────────────────
+
+def _run_no_window(cmd, **kw):
+    """subprocess.run with CREATE_NO_WINDOW on Windows so pip doesn't flash
+    a console window on every call."""
+    if os.name == 'nt':
+        kw.setdefault('creationflags', 0x08000000)  # CREATE_NO_WINDOW
+    return subprocess.run(cmd, **kw)
+
+
 def _refresh_sys_path():
     try:
         for p in site.getsitepackages() + [site.getusersitepackages()]:
@@ -119,37 +131,16 @@ def _refresh_sys_path():
         print(f"[BG Remover] sys.path refresh warning: {e}")
 
 
-def _check_packages():
-    """Return list of (pip_name, import_error_str) for packages that fail
-    to import. import_error_str is the actual exception message, which on
-    Windows includes 'DLL load failed' + the failing DLL name."""
-    problems = []
-    checks = [("onnxruntime", "onnxruntime"),
-              ("numpy", "numpy"),
-              ("scipy", "scipy"),
-              ("Pillow", "PIL")]
-    for pip_name, import_name in checks:
-        # Drop any previously-imported broken module so we re-probe fresh
-        if import_name in sys.modules:
-            del sys.modules[import_name]
-        try:
-            importlib.import_module(import_name)
-        except Exception as e:
-            problems.append((pip_name, f"{type(e).__name__}: {e}"))
-    return problems
-
-
-def _missing_names(problems):
-    return [p[0] for p in problems]
-
-
 def _probe_import_subprocess(module_name):
-    """Spawn a subprocess to try importing a module and return its real stderr.
-    This surfaces loader errors (DLL load failed + the specific DLL/procedure
-    name) that importlib sometimes hides inside this process."""
+    """Spawn a subprocess to try importing a module. Returns (ok, stderr).
+    This surfaces loader errors (DLL load failed + DLL name) that importlib
+    sometimes hides inside this process."""
     try:
-        result = subprocess.run(
-            [sys.executable, '-c', f'import {module_name}; print("OK", {module_name}.__version__ if hasattr({module_name}, "__version__") else "")'],
+        result = _run_no_window(
+            [sys.executable, '-c',
+             f'import {module_name}; '
+             f'print("OK", {module_name}.__version__ '
+             f'if hasattr({module_name}, "__version__") else "")'],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
@@ -159,41 +150,97 @@ def _probe_import_subprocess(module_name):
         return False, f"{type(e).__name__}: {e}"
 
 
+def _onnxruntime_installed_version():
+    """Return installed onnxruntime version via pip show, or None."""
+    try:
+        result = _run_no_window(
+            [sys.executable, '-m', 'pip', 'show', 'onnxruntime'],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        for line in (result.stdout or '').splitlines():
+            if line.startswith('Version:'):
+                return line.split(':', 1)[1].strip()
+    except Exception:
+        pass
+    return None
+
+
+# ── Package checking ──────────────────────────────────────────────────────────
+
+def _check_packages():
+    """Return list of (pip_name, import_error_str). Each entry is a package
+    that either can't be imported in-process OR can't be imported via
+    subprocess (which catches DLL init failures that importlib silently
+    swallows)."""
+    problems = []
+    checks = [("onnxruntime", "onnxruntime"),
+              ("numpy", "numpy"),
+              ("scipy", "scipy"),
+              ("Pillow", "PIL")]
+    for pip_name, import_name in checks:
+        # Step 1: in-process import
+        if import_name in sys.modules:
+            del sys.modules[import_name]
+        in_process_err = None
+        try:
+            importlib.import_module(import_name)
+        except Exception as e:
+            in_process_err = f"{type(e).__name__}: {e}"
+
+        # Step 2: subprocess probe (catches DLL init failures the in-process
+        # importer may miss or reformat). If subprocess fails, we trust that.
+        ok, out = _probe_import_subprocess(import_name)
+        if not ok:
+            # Prefer the subprocess error — it's the authoritative one from
+            # the OS loader.
+            problems.append((pip_name, (out or in_process_err or 'unknown').strip()))
+        elif in_process_err is not None:
+            problems.append((pip_name, in_process_err))
+    return problems
+
+
+def _missing_names(problems):
+    return [p[0] for p in problems]
+
+
+# ── Install logic ─────────────────────────────────────────────────────────────
+
 def _format_install_error(problems):
-    """Build a detailed error message for _last_error_detail that explains
-    what's wrong and how to fix it."""
     lines = ["Installed packages but can't import the following:"]
     for name, err in problems:
-        lines.append(f"  • {name}: {err}")
-
-    # Also probe the failing modules in a subprocess so we get the real
-    # Windows loader error (DLL name + procedure name).
-    lines.append("")
-    lines.append("Subprocess import probes:")
-    for name, _ in problems:
-        import_name = {'Pillow': 'PIL'}.get(name, name)
-        ok, out = _probe_import_subprocess(import_name)
-        status = "OK" if ok else "FAIL"
-        lines.append(f"  [{status}] python -c 'import {import_name}':")
-        # Keep each line indented
-        for line in out.splitlines()[-10:]:  # last 10 lines of stderr
-            lines.append(f"      {line}")
+        lines.append(f"  • {name}:")
+        for subline in (err or '').splitlines()[:6]:
+            lines.append(f"      {subline}")
 
     joined = "\n".join(lines)
 
-    # Add a targeted fix hint based on error signatures
     all_errs = " ".join(err for _, err in problems).lower()
-    if os.name == 'nt' and ('dll load failed' in all_errs or 'dynamic link library' in all_errs):
+    # Windows DLL init failure — most common, show targeted fix
+    if os.name == 'nt' and (
+        'dll load failed' in all_errs or
+        'dynamic link library' in all_errs or
+        '动态链接库' in " ".join(err for _, err in problems)
+    ):
         joined += (
-            "\n\n→ This looks like a missing Microsoft Visual C++ Redistributable.\n"
-            f"  Download and install: {VC_REDIST_URL}\n"
-            "  Then close Blender completely and re-open it."
+            "\n\n→ Windows DLL initialization failed.\n"
+            f"  1. Install Microsoft VC++ Redistributable: {VC_REDIST_URL}\n"
+            "  2. Close Blender completely (quit the program entirely).\n"
+            "  3. Re-open Blender and click Install Dependencies again.\n"
+            "\n"
+            "  If the error persists after installing VC++ redist, this is\n"
+            "  likely a known onnxruntime regression (issue #24907 on\n"
+            "  microsoft/onnxruntime). The addon already pins onnxruntime\n"
+            "  to the last known-good version (1.20.1) but if a newer\n"
+            "  version got installed, click Install Dependencies again to\n"
+            "  force the pin."
         )
     elif 'numpy' in all_errs and 'multiarray' in all_errs:
         joined += (
-            "\n\n→ This looks like a numpy ABI mismatch.\n"
-            "  Try: reinstall onnxruntime and numpy together.\n"
-            f"  Command: {sys.executable} -m pip install --user --force-reinstall onnxruntime numpy"
+            "\n\n→ numpy ABI mismatch. Try:\n"
+            f"  {sys.executable} -m pip install --user --force-reinstall "
+            f"{ONNXRUNTIME_SPEC} numpy"
         )
     else:
         joined += "\n\nTry: restart Blender, then click Install Dependencies again."
@@ -201,14 +248,45 @@ def _format_install_error(problems):
     return joined
 
 
+def _pip_install(args):
+    """Run pip install with given args. Returns (ok, combined_output)."""
+    cmd = [sys.executable, '-m', 'pip', 'install', '--user'] + args
+    try:
+        result = _run_no_window(cmd, capture_output=True, text=True, timeout=600)
+        ok = result.returncode == 0
+        combined = (result.stdout or '') + (result.stderr or '')
+        return ok, combined
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _pip_uninstall(pkg):
+    try:
+        _run_no_window(
+            [sys.executable, '-m', 'pip', 'uninstall', '-y', pkg],
+            capture_output=True, text=True, timeout=120,
+        )
+    except Exception:
+        pass
+
+
 def ensure_deps():
+    """Install missing packages into Blender's Python. Handles the onnxruntime
+    version pin specifically: if a different version is already installed,
+    uninstall it before reinstalling."""
+    global _last_error_detail
+
     problems = _check_packages()
-    if not problems:
+    missing_names_initial = _missing_names(problems)
+
+    # If onnxruntime is installed but at the wrong version, force-swap it
+    installed_ort = _onnxruntime_installed_version()
+    ort_needs_pin = installed_ort and installed_ort != '1.20.1'
+
+    if not problems and not ort_needs_pin:
         return True
 
-    missing = _missing_names(problems)
     python = sys.executable
-    print(f"[BG Remover] Installing: {', '.join(missing)}")
 
     try:
         subprocess.check_call(
@@ -218,43 +296,61 @@ def ensure_deps():
     except Exception:
         pass
 
-    try:
-        result = subprocess.run(
-            [python, '-m', 'pip', 'install', '--upgrade', '--user'] + missing,
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
+    # If onnxruntime is installed but wrong version, or failed to import,
+    # uninstall first so pip doesn't treat the install as already-satisfied.
+    if ort_needs_pin or any(n == 'onnxruntime' for n in missing_names_initial):
+        print(f"[BG Remover] Removing existing onnxruntime "
+              f"(version {installed_ort or '?'}) before reinstalling pinned 1.20.1")
+        _pip_uninstall('onnxruntime')
+
+    # Build install list
+    install_list = []
+    if any(n == 'onnxruntime' for n in missing_names_initial) or ort_needs_pin:
+        install_list.append(ONNXRUNTIME_SPEC)
+    for pkg in REQUIRED_PACKAGES_UNPINNED:
+        if pkg in missing_names_initial:
+            install_list.append(pkg)
+
+    if install_list:
+        print(f"[BG Remover] Installing: {', '.join(install_list)}")
+        ok, output = _pip_install(['--upgrade'] + install_list)
+        if not ok:
             raise RuntimeError(
-                f"pip install failed:\n{(result.stderr or result.stdout)[-1500:]}\n\n"
-                f"Try running Blender as Administrator (Windows) / with sudo "
-                f"(Linux/macOS), or install manually with:\n"
-                f"  {python} -m pip install --user {' '.join(missing)}"
+                f"pip install failed:\n{output[-1500:]}\n\n"
+                f"Try running Blender as Administrator (Windows), or install "
+                f"manually:\n  {python} -m pip install --user "
+                f"{' '.join(install_list)}"
             )
-    except FileNotFoundError:
-        raise RuntimeError(
-            "Blender's Python has no pip and ensurepip failed. "
-            "Please reinstall Blender."
-        )
 
     _refresh_sys_path()
 
     still_problems = _check_packages()
     if still_problems:
         detail = _format_install_error(still_problems)
+        # Persist to file so we don't lose it to console scrollback
+        try:
+            with open(_diagnostics_path(), 'w', encoding='utf-8') as f:
+                f.write("[BG Remover] Install succeeded but imports fail\n")
+                f.write("=" * 70 + "\n")
+                f.write(detail + "\n")
+        except Exception:
+            pass
+
         print(f"[BG Remover] ────── Install succeeded but imports fail ──────")
         print(detail)
-        print(f"[BG Remover] ────────────────────────────────────────────────")
-        # Store the full detail for the panel and diagnostic view
-        global _last_error_detail
+        print(f"[BG Remover] ──────────────────────────────────────────────────")
+        print(f"[BG Remover] Detail also saved to: {_diagnostics_path()}")
+
         _last_error_detail = detail
-        # Short one-liner for the RuntimeError (panel shows first line of this)
         first_failing = still_problems[0]
         raise RuntimeError(
-            f"Can't import {first_failing[0]}: {first_failing[1][:120]}. "
-            "See System Console for full details and fix."
+            f"Can't import {first_failing[0]}. "
+            f"See {_diagnostics_path()} for details."
         )
     return True
 
+
+# ── Model download ────────────────────────────────────────────────────────────
 
 def _download_with_progress(url, dst_path):
     tmp_path = dst_path.with_suffix('.part')
@@ -324,8 +420,6 @@ def get_session():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _cleanmask_apply(mask_u8, src_rgb):
-    """Top-level cleanMask. Returns uint8 alpha array (H, W).
-    src_rgb: (H, W, 3) uint8. mask_u8: (H, W) uint8."""
     import numpy as np
     from scipy import ndimage
 
@@ -665,8 +759,8 @@ def _use_clean_mask(context):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class BGRemover_OT_InstallDeps(bpy.types.Operator):
-    """Install onnxruntime + numpy + scipy + Pillow into Blender's Python,
-    then download the RMBG-1.4 ONNX model (~176 MB)."""
+    """Install onnxruntime==1.20.1 + numpy + scipy + Pillow into Blender's
+    Python, then download the RMBG-1.4 ONNX model (~176 MB)."""
     bl_idname = 'bgremover.install_deps'
     bl_label = 'Install Dependencies'
 
@@ -689,102 +783,137 @@ class BGRemover_OT_InstallDeps(bpy.types.Operator):
 
 
 class BGRemover_OT_Diagnostics(bpy.types.Operator):
-    """Print detailed environment info to the System Console.
-    Use this to report issues — toggle the console (Window > Toggle System
-    Console on Windows) and click this, then copy the output."""
+    """Write environment info to disk and the console. The saved file
+    can be opened from the panel to copy-paste its contents."""
     bl_idname = 'bgremover.diagnostics'
-    bl_label = 'Run Diagnostics (to Console)'
+    bl_label = 'Run Diagnostics'
 
     def execute(self, context):
         import platform
 
-        print("")
-        print("=" * 70)
-        print("[BG Remover] DIAGNOSTICS")
-        print("=" * 70)
-        print(f"Addon version:       {bl_info['version']}")
-        print(f"Blender version:     {bpy.app.version_string}")
-        print(f"Platform:            {platform.platform()}")
-        print(f"Python executable:   {sys.executable}")
-        print(f"Python version:      {sys.version.splitlines()[0]}")
-        print(f"User site-packages:  {site.getusersitepackages()}")
-        print(f"Addon data dir:      {_addon_data_dir()}")
-        print(f"Model file:          {_model_path()}")
+        lines = []
+
+        def out(s=''):
+            lines.append(s)
+            print(s)
+
+        out("=" * 70)
+        out("[BG Remover] DIAGNOSTICS")
+        out("=" * 70)
+        out(f"Addon version:       {bl_info['version']}")
+        out(f"Blender version:     {bpy.app.version_string}")
+        out(f"Platform:            {platform.platform()}")
+        out(f"Python executable:   {sys.executable}")
+        out(f"Python version:      {sys.version.splitlines()[0]}")
+        out(f"User site-packages:  {site.getusersitepackages()}")
+        out(f"Addon data dir:      {_addon_data_dir()}")
+        out(f"Model file:          {_model_path()}")
         mp = _model_path()
         if mp.is_file():
-            print(f"  Model size:        {mp.stat().st_size / 1024 / 1024:.1f} MB")
+            out(f"  Model size:        {mp.stat().st_size / 1024 / 1024:.1f} MB")
         else:
-            print(f"  Model size:        (not downloaded yet)")
+            out(f"  Model size:        (not downloaded yet)")
 
-        print("")
-        print("sys.path entries containing 'site-packages':")
+        out("")
+        out("sys.path entries with 'site-packages':")
         for p in sys.path:
             if 'site-packages' in p.lower():
-                print(f"  {p}")
+                out(f"  {p}")
 
-        print("")
-        print("Package import probes (in-process):")
-        problems = _check_packages()
-        if not problems:
-            print("  ✅ All 4 packages import cleanly in the Blender process.")
-        else:
-            for name, err in problems:
-                print(f"  ❌ {name}: {err}")
-
-        print("")
-        print("Package import probes (subprocess — shows real OS loader errors):")
+        out("")
+        out("Package import probes (subprocess — shows real OS loader errors):")
         for pip_name, import_name in [("onnxruntime", "onnxruntime"),
                                        ("numpy", "numpy"),
                                        ("scipy", "scipy"),
                                        ("Pillow", "PIL")]:
-            ok, out = _probe_import_subprocess(import_name)
+            ok, msg = _probe_import_subprocess(import_name)
             tag = "OK  " if ok else "FAIL"
-            print(f"  [{tag}] {pip_name}:")
-            for line in (out or '').splitlines()[-8:]:
-                print(f"      {line}")
+            out(f"  [{tag}] {pip_name}:")
+            for line in (msg or '').splitlines()[-8:]:
+                out(f"      {line}")
 
-        # pip show output for installed versions
-        print("")
-        print("pip show (versions + install locations):")
+        out("")
+        out("pip show (versions + install locations):")
         try:
-            result = subprocess.run(
-                [sys.executable, '-m', 'pip', 'show'] + ['onnxruntime', 'numpy', 'scipy', 'Pillow'],
+            result = _run_no_window(
+                [sys.executable, '-m', 'pip', 'show', 'onnxruntime', 'numpy', 'scipy', 'Pillow'],
                 capture_output=True, text=True, timeout=30,
             )
             for line in (result.stdout or '').splitlines():
                 if any(line.startswith(k) for k in ('Name:', 'Version:', 'Location:')):
-                    print(f"  {line}")
+                    out(f"  {line}")
+                elif line.strip() == '---':
+                    out(f"  ---")
         except Exception as e:
-            print(f"  pip show failed: {e}")
+            out(f"  pip show failed: {e}")
 
-        print("=" * 70)
-        print("[BG Remover] End of diagnostics. Copy everything above this line.")
-        print("=" * 70)
-        print("")
+        out("=" * 70)
+        out("[BG Remover] End of diagnostics.")
+        out("=" * 70)
 
-        self.report({'INFO'}, 'Diagnostics printed — see System Console.')
+        # Save to disk
+        diag_path = _diagnostics_path()
+        try:
+            with open(diag_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines) + '\n')
+            self.report({'INFO'}, f'Diagnostics saved: {diag_path}')
+            print(f"[BG Remover] Diagnostics also saved to: {diag_path}")
+        except Exception as e:
+            self.report({'ERROR'}, f'Could not save diagnostics: {e}')
         return {'FINISHED'}
 
 
-class BGRemover_OT_ShowError(bpy.types.Operator):
-    """Print the last error's full detail to the System Console"""
-    bl_idname = 'bgremover.show_error'
-    bl_label = 'Show Full Error in Console'
+class BGRemover_OT_OpenDiagnostics(bpy.types.Operator):
+    """Open the diagnostics.txt file in the system default text editor"""
+    bl_idname = 'bgremover.open_diagnostics'
+    bl_label = 'Open Diagnostics File'
 
     def execute(self, context):
-        print("")
-        print("=" * 70)
-        print("[BG Remover] LAST ERROR DETAIL")
-        print("=" * 70)
-        if _last_error_detail:
-            print(_last_error_detail)
-        elif _last_error:
-            print(_last_error)
-        else:
-            print("(no error recorded)")
-        print("=" * 70)
-        print("")
-        self.report({'INFO'}, 'Error printed — see System Console.')
+        diag_path = _diagnostics_path()
+        if not diag_path.is_file():
+            self.report({'WARNING'}, 'No diagnostics saved yet — run Diagnostics first.')
+            return {'CANCELLED'}
+        try:
+            if os.name == 'nt':
+                os.startfile(str(diag_path))
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', str(diag_path)])
+            else:
+                subprocess.Popen(['xdg-open', str(diag_path)])
+        except Exception as e:
+            self.report({'ERROR'}, f'Could not open file: {e}')
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BGRemover_OT_ForceReinstallOrt(bpy.types.Operator):
+    """Force-reinstall onnxruntime at the pinned version (1.20.1).
+    Use this if the install seems broken."""
+    bl_idname = 'bgremover.force_reinstall_ort'
+    bl_label = 'Force Reinstall onnxruntime 1.20.1'
+
+    def execute(self, context):
+        global _last_error, _last_error_detail
+        _last_error = None
+        _last_error_detail = None
+        try:
+            self.report({'INFO'}, 'Uninstalling onnxruntime…')
+            _pip_uninstall('onnxruntime')
+            self.report({'INFO'}, 'Installing onnxruntime==1.20.1…')
+            ok, output = _pip_install(['--upgrade', '--force-reinstall', '--no-deps', ONNXRUNTIME_SPEC])
+            if not ok:
+                raise RuntimeError(f"Install failed:\n{output[-1500:]}")
+            # Also make sure its numpy dependency is there
+            _pip_install(['--upgrade', 'numpy'])
+            _refresh_sys_path()
+            ok, out = _probe_import_subprocess('onnxruntime')
+            if not ok:
+                raise RuntimeError(f"Still can't import onnxruntime:\n{out}")
+            self.report({'INFO'}, f'✅ onnxruntime reinstalled: {out}')
+        except Exception as e:
+            _last_error = str(e)
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -972,26 +1101,38 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             box.label(text='Setup required', icon='ERROR')
             box.label(text=f"Cannot import: {', '.join(missing)}")
 
-            # Show the actual error for the first failing package
-            first_err = problems[0][1][:55]
-            box.label(text=first_err, icon='INFO')
+            # Show the first-line of the first failing package's actual error
+            first_err_line = (problems[0][1] or '').strip().splitlines()[0][:55]
+            box.label(text=first_err_line, icon='INFO')
 
-            # If it looks like a VC++ redist issue on Windows, surface the link
             all_errs = " ".join(err for _, err in problems).lower()
-            if os.name == 'nt' and ('dll load failed' in all_errs or 'dynamic link library' in all_errs):
+            # Detect DLL-init failure across locales (Chinese Windows returns
+            # the error message translated)
+            full_err = " ".join(err for _, err in problems)
+            dll_keywords = ['dll load failed', 'dynamic link library',
+                            '动态链接库', '初始化例程失败']
+            is_dll_init_fail = any(k in all_errs or k in full_err for k in dll_keywords)
+
+            if os.name == 'nt' and is_dll_init_fail:
                 vc_box = box.box()
                 vc_box.label(text='Likely cause: missing VC++ Redist', icon='INFO')
                 op = vc_box.operator('bgremover.open_url',
-                                     text='Open vc_redist.x64.exe download',
+                                     text='Install vc_redist.x64.exe',
                                      icon='URL')
                 op.url = VC_REDIST_URL
-                vc_box.label(text='Install it, close Blender, reopen.', icon='BLANK1')
+                vc_box.label(text='Then close Blender, reopen, try again.',
+                             icon='BLANK1')
+                # Offer force-reinstall as an alternative
+                vc_box.operator('bgremover.force_reinstall_ort',
+                                text='Reinstall onnxruntime 1.20.1',
+                                icon='FILE_REFRESH')
 
             row = box.row(align=True)
             row.operator('bgremover.install_deps', icon='IMPORT')
             row.operator('bgremover.diagnostics', text='Diagnostics', icon='CONSOLE')
-            if _last_error_detail:
-                box.operator('bgremover.show_error', icon='TEXT')
+            if _diagnostics_path().is_file():
+                box.operator('bgremover.open_diagnostics',
+                             text='Open diagnostics.txt', icon='TEXT')
             return
 
         if not model_exists:
@@ -1013,8 +1154,9 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             err_box.alert = True
             first_line = _last_error.strip().splitlines()[0][:60]
             err_box.label(text=f"Last error: {first_line}", icon='ERROR')
-            if _last_error_detail:
-                err_box.operator('bgremover.show_error', icon='TEXT')
+            if _diagnostics_path().is_file():
+                err_box.operator('bgremover.open_diagnostics',
+                                 text='Open diagnostics.txt', icon='TEXT')
 
         prefs = get_prefs(context)
         if prefs is not None:
@@ -1054,7 +1196,8 @@ classes = [
     BGRemoverPreferences,
     BGRemover_OT_InstallDeps,
     BGRemover_OT_Diagnostics,
-    BGRemover_OT_ShowError,
+    BGRemover_OT_OpenDiagnostics,
+    BGRemover_OT_ForceReinstallOrt,
     BGRemover_OT_RemoveBackground,
     BGRemover_OT_RemoveFromRender,
     BGRemover_OT_ProcessSequence,
