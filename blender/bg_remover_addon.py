@@ -27,7 +27,7 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (3, 1, 0),
+    "version": (3, 1, 1),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (ONNX Runtime, web-parity cleanMask)",
@@ -57,12 +57,15 @@ MODEL_INPUT_SIZE = 1024
 # Wheels available for Python 3.7 through 3.14 on all major platforms.
 REQUIRED_PACKAGES = ["onnxruntime", "numpy", "scipy", "Pillow"]
 
+VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 
 _session = None
 _session_provider = None
 _last_error = None
+_last_error_detail = None   # full multiline text for the console
 
 
 # ── Addon Preferences ─────────────────────────────────────────────────────────
@@ -117,24 +120,93 @@ def _refresh_sys_path():
 
 
 def _check_packages():
-    missing = []
+    """Return list of (pip_name, import_error_str) for packages that fail
+    to import. import_error_str is the actual exception message, which on
+    Windows includes 'DLL load failed' + the failing DLL name."""
+    problems = []
     checks = [("onnxruntime", "onnxruntime"),
               ("numpy", "numpy"),
               ("scipy", "scipy"),
               ("Pillow", "PIL")]
     for pip_name, import_name in checks:
+        # Drop any previously-imported broken module so we re-probe fresh
+        if import_name in sys.modules:
+            del sys.modules[import_name]
         try:
             importlib.import_module(import_name)
-        except ImportError:
-            missing.append(pip_name)
-    return missing
+        except Exception as e:
+            problems.append((pip_name, f"{type(e).__name__}: {e}"))
+    return problems
+
+
+def _missing_names(problems):
+    return [p[0] for p in problems]
+
+
+def _probe_import_subprocess(module_name):
+    """Spawn a subprocess to try importing a module and return its real stderr.
+    This surfaces loader errors (DLL load failed + the specific DLL/procedure
+    name) that importlib sometimes hides inside this process."""
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', f'import {module_name}; print("OK", {module_name}.__version__ if hasattr({module_name}, "__version__") else "")'],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return True, (result.stdout or '').strip()
+        return False, (result.stderr or result.stdout or '').strip()
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _format_install_error(problems):
+    """Build a detailed error message for _last_error_detail that explains
+    what's wrong and how to fix it."""
+    lines = ["Installed packages but can't import the following:"]
+    for name, err in problems:
+        lines.append(f"  • {name}: {err}")
+
+    # Also probe the failing modules in a subprocess so we get the real
+    # Windows loader error (DLL name + procedure name).
+    lines.append("")
+    lines.append("Subprocess import probes:")
+    for name, _ in problems:
+        import_name = {'Pillow': 'PIL'}.get(name, name)
+        ok, out = _probe_import_subprocess(import_name)
+        status = "OK" if ok else "FAIL"
+        lines.append(f"  [{status}] python -c 'import {import_name}':")
+        # Keep each line indented
+        for line in out.splitlines()[-10:]:  # last 10 lines of stderr
+            lines.append(f"      {line}")
+
+    joined = "\n".join(lines)
+
+    # Add a targeted fix hint based on error signatures
+    all_errs = " ".join(err for _, err in problems).lower()
+    if os.name == 'nt' and ('dll load failed' in all_errs or 'dynamic link library' in all_errs):
+        joined += (
+            "\n\n→ This looks like a missing Microsoft Visual C++ Redistributable.\n"
+            f"  Download and install: {VC_REDIST_URL}\n"
+            "  Then close Blender completely and re-open it."
+        )
+    elif 'numpy' in all_errs and 'multiarray' in all_errs:
+        joined += (
+            "\n\n→ This looks like a numpy ABI mismatch.\n"
+            "  Try: reinstall onnxruntime and numpy together.\n"
+            f"  Command: {sys.executable} -m pip install --user --force-reinstall onnxruntime numpy"
+        )
+    else:
+        joined += "\n\nTry: restart Blender, then click Install Dependencies again."
+
+    return joined
 
 
 def ensure_deps():
-    missing = _check_packages()
-    if not missing:
+    problems = _check_packages()
+    if not problems:
         return True
 
+    missing = _missing_names(problems)
     python = sys.executable
     print(f"[BG Remover] Installing: {', '.join(missing)}")
 
@@ -166,11 +238,20 @@ def ensure_deps():
 
     _refresh_sys_path()
 
-    still_missing = _check_packages()
-    if still_missing:
+    still_problems = _check_packages()
+    if still_problems:
+        detail = _format_install_error(still_problems)
+        print(f"[BG Remover] ────── Install succeeded but imports fail ──────")
+        print(detail)
+        print(f"[BG Remover] ────────────────────────────────────────────────")
+        # Store the full detail for the panel and diagnostic view
+        global _last_error_detail
+        _last_error_detail = detail
+        # Short one-liner for the RuntimeError (panel shows first line of this)
+        first_failing = still_problems[0]
         raise RuntimeError(
-            f"Installed packages but can't import: {', '.join(still_missing)}. "
-            "Try restarting Blender."
+            f"Can't import {first_failing[0]}: {first_failing[1][:120]}. "
+            "See System Console for full details and fix."
         )
     return True
 
@@ -240,17 +321,6 @@ def get_session():
 # cleanMask v16 — Python port of the JS function in index.html.
 # Produces byte-identical output to the web version (verified against the
 # JS reference on 150,000+ test pixels).
-#
-# Algorithmic phases:
-#   1. K-means (K=8, 20 iter) background color model from edge samples
-#   2. Per-pixel background distance + per-cluster tolerance
-#   3. Binarize AI mask at threshold 127, drop components <0.5% of area
-#   4. Iterative refinement loop (up to 8 passes, stops when score plateaus):
-#        handle_sky → fill_background_holes → morph_close ×2 →
-#        handle_sky → grow_into_body ×3 → handle_sky
-#   5. Per-row thin-sky-stripe removal (runs <20 px, bluish, mostly bg)
-#   6. Drop components <0.3% of area
-#   7. 3×3 box blur with hard 0/255 interior, anti-aliased edges
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _cleanmask_apply(mask_u8, src_rgb):
@@ -262,11 +332,9 @@ def _cleanmask_apply(mask_u8, src_rgb):
     H, W, _ = src_rgb.shape
     assert mask_u8.shape == (H, W)
 
-    # 4-connected structuring element, matches JS DIRS=[-1,+1,-W,+W]
     _S4 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
 
     def label_with_border(arr):
-        """scipy label + per-component `on_border` flag (within 2 px of edge)."""
         lab, n = ndimage.label(arr, structure=_S4)
         if n == 0:
             return lab, np.zeros(0, dtype=bool), np.zeros(0, dtype=np.int64)
@@ -281,7 +349,6 @@ def _cleanmask_apply(mask_u8, src_rgb):
         on_border[touched[touched > 0]] = True
         return lab, on_border[1:], sizes
 
-    # ── Phase 1: background color model via K-means on edge pixels ───────────
     K = 8
     samples = []
     for x in range(0, W, 3):
@@ -306,7 +373,6 @@ def _cleanmask_apply(mask_u8, src_rgb):
                 new_cents[k] = samples[mask_k].mean(axis=0)
         cents = new_cents
 
-    # Tolerance per cluster
     diff = samples[:, None, :] - cents[None, :, :]
     dists = np.sqrt((diff * diff).sum(axis=2))
     assign = np.argmin(dists, axis=1)
@@ -321,7 +387,6 @@ def _cleanmask_apply(mask_u8, src_rgb):
         std_d = np.sqrt(((a - mean_d) ** 2).mean())
         tols[k] = max(22.0, min(62.0, mean_d + 2.5 * std_d + 12.0))
 
-    # ── Phase 2: per-pixel nearest-cluster distance + per-pixel tolerance ──
     flat = src_rgb.reshape(-1, 3).astype(np.float64)
     diff = flat[:, None, :] - cents[None, :, :]
     dists = np.sqrt((diff * diff).sum(axis=2))
@@ -345,7 +410,6 @@ def _cleanmask_apply(mask_u8, src_rgb):
         c3 = (bright_img > 160) & ((b - r) < 15)
         return (c1 | c2 | c3) & (nd > tp * 0.3)
 
-    # ── handle_sky: vectorized label-LUT style ──
     def handle_sky(bin_mask):
         sky_fg = bin_mask & is_sky_mask()
         if not sky_fg.any():
@@ -447,11 +511,9 @@ def _cleanmask_apply(mask_u8, src_rgb):
         keep[0] = False
         return keep[lab]
 
-    # ── Phase 3: binarize + drop tiny ─────────────────────────────────────
     bin_mask = mask_u8 > 127
     bin_mask = drop_small(bin_mask, int(W * H * 0.005))
 
-    # ── Phase 4: iterative refinement ─────────────────────────────────────
     prev = float('inf')
     for _ in range(8):
         sc = score(bin_mask)
@@ -466,7 +528,6 @@ def _cleanmask_apply(mask_u8, src_rgb):
         bin_mask = grow_into_body(bin_mask)
         bin_mask = handle_sky(bin_mask)
 
-    # ── Phase 5: per-row thin sky stripes ─────────────────────────────────
     r64 = src_rgb[..., 0].astype(np.int64)
     g64 = src_rgb[..., 1].astype(np.int64)
     b64 = src_rgb[..., 2].astype(np.int64)
@@ -495,10 +556,8 @@ def _cleanmask_apply(mask_u8, src_rgb):
             if (aB - aR) > 15 and bc / rw > 0.60 and sat_v < 20:
                 bin_mask[y, start:end] = False
 
-    # ── Phase 6: drop tiny (slightly more permissive) ─────────────────────
     bin_mask = drop_small(bin_mask, int(W * H * 0.003))
 
-    # ── Phase 7: 3x3 box blur with hard interior, anti-aliased edges ──────
     a = bin_mask.astype(np.float32)
     bl = a.copy()
     if H >= 3 and W >= 3:
@@ -522,14 +581,6 @@ def _cleanmask_apply(mask_u8, src_rgb):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def remove_bg(pil_img, use_clean_mask=True):
-    """Run RMBG-1.4 on a PIL Image. Returns RGBA PIL Image.
-
-    Preprocessing matches briaai's reference code exactly:
-    resize 1024x1024 bilinear -> /255 -> (x-0.5)/1.0 -> NCHW float32.
-
-    If use_clean_mask is True (default), applies the cleanMask v16
-    post-processing for web-parity output. Otherwise returns the raw
-    model mask (faster, suitable for batch sequences)."""
     import numpy as np
     from PIL import Image
 
@@ -540,38 +591,31 @@ def remove_bg(pil_img, use_clean_mask=True):
     W, H = src_rgb.size
     src_arr = np.asarray(src_rgb)
 
-    # Preprocess
     resized = src_rgb.resize((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), Image.BILINEAR)
     arr = np.asarray(resized, dtype=np.float32) / 255.0
     arr = (arr - 0.5) / 1.0
     arr = np.transpose(arr, (2, 0, 1))
     arr = np.expand_dims(arr, 0).astype(np.float32)
 
-    # Inference
     outputs = session.run(None, {input_name: arr})
     mask = np.asarray(outputs[0]).squeeze()
     if mask.ndim != 2:
         raise RuntimeError(f"Unexpected mask shape from model: {mask.shape}")
 
-    # Min-max normalize (matches briaai reference + transformers.js)
     mn, mx = float(mask.min()), float(mask.max())
     if mx > mn:
         mask = (mask - mn) / (mx - mn)
     else:
         mask = np.zeros_like(mask)
 
-    # Resize mask back to source size
     mask_img = Image.fromarray((mask * 255).clip(0, 255).astype('uint8'))
     mask_img = mask_img.resize((W, H), Image.BILINEAR)
     mask_u8 = np.asarray(mask_img).copy()
 
-    # Optional cleanMask post-processing (matches web version output)
     if use_clean_mask:
         try:
             mask_u8 = _cleanmask_apply(mask_u8, src_arr)
         except Exception as e:
-            # If cleanMask fails for any reason, fall back to raw mask
-            # rather than failing the whole operation.
             print(f"[BG Remover] cleanMask failed, using raw mask: {e}")
 
     rgba = np.dstack([src_arr, mask_u8])
@@ -627,8 +671,9 @@ class BGRemover_OT_InstallDeps(bpy.types.Operator):
     bl_label = 'Install Dependencies'
 
     def execute(self, context):
-        global _last_error
+        global _last_error, _last_error_detail
         _last_error = None
+        _last_error_detail = None
         try:
             self.report({'INFO'}, 'Installing packages…')
             ensure_deps()
@@ -640,6 +685,106 @@ class BGRemover_OT_InstallDeps(bpy.types.Operator):
             _last_error = str(e)
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BGRemover_OT_Diagnostics(bpy.types.Operator):
+    """Print detailed environment info to the System Console.
+    Use this to report issues — toggle the console (Window > Toggle System
+    Console on Windows) and click this, then copy the output."""
+    bl_idname = 'bgremover.diagnostics'
+    bl_label = 'Run Diagnostics (to Console)'
+
+    def execute(self, context):
+        import platform
+
+        print("")
+        print("=" * 70)
+        print("[BG Remover] DIAGNOSTICS")
+        print("=" * 70)
+        print(f"Addon version:       {bl_info['version']}")
+        print(f"Blender version:     {bpy.app.version_string}")
+        print(f"Platform:            {platform.platform()}")
+        print(f"Python executable:   {sys.executable}")
+        print(f"Python version:      {sys.version.splitlines()[0]}")
+        print(f"User site-packages:  {site.getusersitepackages()}")
+        print(f"Addon data dir:      {_addon_data_dir()}")
+        print(f"Model file:          {_model_path()}")
+        mp = _model_path()
+        if mp.is_file():
+            print(f"  Model size:        {mp.stat().st_size / 1024 / 1024:.1f} MB")
+        else:
+            print(f"  Model size:        (not downloaded yet)")
+
+        print("")
+        print("sys.path entries containing 'site-packages':")
+        for p in sys.path:
+            if 'site-packages' in p.lower():
+                print(f"  {p}")
+
+        print("")
+        print("Package import probes (in-process):")
+        problems = _check_packages()
+        if not problems:
+            print("  ✅ All 4 packages import cleanly in the Blender process.")
+        else:
+            for name, err in problems:
+                print(f"  ❌ {name}: {err}")
+
+        print("")
+        print("Package import probes (subprocess — shows real OS loader errors):")
+        for pip_name, import_name in [("onnxruntime", "onnxruntime"),
+                                       ("numpy", "numpy"),
+                                       ("scipy", "scipy"),
+                                       ("Pillow", "PIL")]:
+            ok, out = _probe_import_subprocess(import_name)
+            tag = "OK  " if ok else "FAIL"
+            print(f"  [{tag}] {pip_name}:")
+            for line in (out or '').splitlines()[-8:]:
+                print(f"      {line}")
+
+        # pip show output for installed versions
+        print("")
+        print("pip show (versions + install locations):")
+        try:
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'show'] + ['onnxruntime', 'numpy', 'scipy', 'Pillow'],
+                capture_output=True, text=True, timeout=30,
+            )
+            for line in (result.stdout or '').splitlines():
+                if any(line.startswith(k) for k in ('Name:', 'Version:', 'Location:')):
+                    print(f"  {line}")
+        except Exception as e:
+            print(f"  pip show failed: {e}")
+
+        print("=" * 70)
+        print("[BG Remover] End of diagnostics. Copy everything above this line.")
+        print("=" * 70)
+        print("")
+
+        self.report({'INFO'}, 'Diagnostics printed — see System Console.')
+        return {'FINISHED'}
+
+
+class BGRemover_OT_ShowError(bpy.types.Operator):
+    """Print the last error's full detail to the System Console"""
+    bl_idname = 'bgremover.show_error'
+    bl_label = 'Show Full Error in Console'
+
+    def execute(self, context):
+        print("")
+        print("=" * 70)
+        print("[BG Remover] LAST ERROR DETAIL")
+        print("=" * 70)
+        if _last_error_detail:
+            print(_last_error_detail)
+        elif _last_error:
+            print(_last_error)
+        else:
+            print("(no error recorded)")
+        print("=" * 70)
+        print("")
+        self.report({'INFO'}, 'Error printed — see System Console.')
         return {'FINISHED'}
 
 
@@ -786,6 +931,23 @@ class BGRemover_OT_ClearModel(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BGRemover_OT_OpenURL(bpy.types.Operator):
+    """Open a URL in the system web browser"""
+    bl_idname = 'bgremover.open_url'
+    bl_label = 'Open URL'
+
+    url: bpy.props.StringProperty()
+
+    def execute(self, context):
+        import webbrowser
+        try:
+            webbrowser.open(self.url)
+        except Exception as e:
+            self.report({'ERROR'}, f'Could not open URL: {e}')
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Panel
 # ══════════════════════════════════════════════════════════════════════════════
@@ -800,15 +962,36 @@ class BGRemover_PT_Panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
 
-        missing = _check_packages()
+        problems = _check_packages()
+        missing = _missing_names(problems)
         model_exists = _model_path().is_file()
 
-        if missing:
+        if problems:
             box = layout.box()
             box.alert = True
             box.label(text='Setup required', icon='ERROR')
-            box.label(text=f"Missing: {', '.join(missing)}")
-            box.operator('bgremover.install_deps', icon='IMPORT')
+            box.label(text=f"Cannot import: {', '.join(missing)}")
+
+            # Show the actual error for the first failing package
+            first_err = problems[0][1][:55]
+            box.label(text=first_err, icon='INFO')
+
+            # If it looks like a VC++ redist issue on Windows, surface the link
+            all_errs = " ".join(err for _, err in problems).lower()
+            if os.name == 'nt' and ('dll load failed' in all_errs or 'dynamic link library' in all_errs):
+                vc_box = box.box()
+                vc_box.label(text='Likely cause: missing VC++ Redist', icon='INFO')
+                op = vc_box.operator('bgremover.open_url',
+                                     text='Open vc_redist.x64.exe download',
+                                     icon='URL')
+                op.url = VC_REDIST_URL
+                vc_box.label(text='Install it, close Blender, reopen.', icon='BLANK1')
+
+            row = box.row(align=True)
+            row.operator('bgremover.install_deps', icon='IMPORT')
+            row.operator('bgremover.diagnostics', text='Diagnostics', icon='CONSOLE')
+            if _last_error_detail:
+                box.operator('bgremover.show_error', icon='TEXT')
             return
 
         if not model_exists:
@@ -830,8 +1013,9 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             err_box.alert = True
             first_line = _last_error.strip().splitlines()[0][:60]
             err_box.label(text=f"Last error: {first_line}", icon='ERROR')
+            if _last_error_detail:
+                err_box.operator('bgremover.show_error', icon='TEXT')
 
-        # Clean mask toggle (matches web version behavior when on)
         prefs = get_prefs(context)
         if prefs is not None:
             layout.prop(prefs, "use_clean_mask")
@@ -858,6 +1042,7 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         layout.operator('bgremover.process_sequence', icon='SEQUENCE')
 
         layout.separator()
+        layout.operator('bgremover.diagnostics', icon='CONSOLE')
         layout.operator('bgremover.clear_model', icon='TRASH')
 
 
@@ -868,10 +1053,13 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 classes = [
     BGRemoverPreferences,
     BGRemover_OT_InstallDeps,
+    BGRemover_OT_Diagnostics,
+    BGRemover_OT_ShowError,
     BGRemover_OT_RemoveBackground,
     BGRemover_OT_RemoveFromRender,
     BGRemover_OT_ProcessSequence,
     BGRemover_OT_ClearModel,
+    BGRemover_OT_OpenURL,
     BGRemover_PT_Panel,
 ]
 
