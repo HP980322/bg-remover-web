@@ -10,15 +10,15 @@
 # Runs entirely inside Blender's bundled Python via ONNX Runtime.
 # No system Python, no venv, no torch, no transformers. Just works.
 #
-# On first use the addon installs onnxruntime==1.20.1 + numpy + scipy
-# + Pillow into Blender's Python and downloads the RMBG-1.4 ONNX
-# model (~176 MB, cached forever).
+# On first use the addon auto-installs onnxruntime==1.20.1 + numpy
+# + scipy + Pillow and downloads the RMBG-1.4 ONNX model (~176 MB,
+# cached forever).
 # ============================================================
 
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (3, 1, 3),
+    "version": (3, 1, 4),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (ONNX Runtime, web-parity cleanMask)",
@@ -28,7 +28,9 @@ bl_info = {
 import bpy
 import os
 import sys
+import json
 import site
+import time
 import shutil
 import tempfile
 import threading
@@ -49,6 +51,9 @@ ONNXRUNTIME_SPEC = "onnxruntime==1.20.1"
 REQUIRED_PACKAGES_UNPINNED = ["numpy", "scipy", "Pillow"]
 VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
+# State file schema version — bump if the format changes
+_STATE_VERSION = 1
+
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 
@@ -57,21 +62,18 @@ _session_provider = None
 _last_error = None
 _last_error_detail = None
 
-# Status state machine — panel reads these, workers set them.
-#   'idle'             — nothing in progress
-#   'checking'         — running the thorough subprocess import probe
-#   'installing'       — pip install is running
-#   'uninstalling'     — pip uninstall is running
-#   'downloading'      — downloading the ONNX model
-#   'loading_session'  — opening the ONNX InferenceSession
 _status = 'idle'
 _status_message = ''
-_status_progress = -1.0  # 0.0–1.0 for known-length ops, -1.0 for indeterminate
+_status_progress = -1.0
 
-# Cached result of the thorough check. None = not yet checked.
-# Panel's draw() reads this; it does NOT trigger a check itself.
 _cached_problems = None
-_cache_valid = False  # gets set to True after the initial check completes
+_cache_valid = False
+
+# Track whether we've already tried auto-install this session. Prevents
+# an install-failure loop where the panel keeps re-triggering install.
+_auto_install_attempted = False
+
+_work_thread = None
 
 
 # ── Addon Preferences ─────────────────────────────────────────────────────────
@@ -90,8 +92,27 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
         default=True,
     )
 
+    auto_install: bpy.props.BoolProperty(
+        name="Auto-install dependencies on startup",
+        description=(
+            "If packages are missing when Blender starts, install them "
+            "automatically without requiring a button click. Turn off if "
+            "you want to manage installs yourself."
+        ),
+        default=True,
+    )
+
+    show_advanced: bpy.props.BoolProperty(
+        name="Show advanced tools",
+        description="Show diagnostic tools and advanced options in the panel.",
+        default=False,
+    )
+
     def draw(self, context):
-        self.layout.prop(self, "use_clean_mask")
+        layout = self.layout
+        layout.prop(self, "use_clean_mask")
+        layout.prop(self, "auto_install")
+        layout.prop(self, "show_advanced")
 
 
 def get_prefs(context=None):
@@ -119,10 +140,70 @@ def _diagnostics_path():
     return _addon_data_dir() / 'diagnostics.txt'
 
 
+def _state_path():
+    return _addon_data_dir() / 'state.json'
+
+
+# ── Persistent state for fast startup ─────────────────────────────────────────
+
+def _load_state():
+    """Return dict of persisted state from last run, or {} if unavailable."""
+    try:
+        p = _state_path()
+        if not p.is_file():
+            return {}
+        with open(p, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if data.get('version') != _STATE_VERSION:
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def _save_state(data):
+    """Persist state dict to disk. Silent on failure (best-effort)."""
+    try:
+        data = dict(data)
+        data['version'] = _STATE_VERSION
+        with open(_state_path(), 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[BG Remover] Could not save state: {e}")
+
+
+def _record_healthy_state():
+    """Call after a successful thorough check confirms everything works.
+    Stores enough info that next startup can skip the thorough check."""
+    _save_state({
+        'healthy': True,
+        'timestamp': time.time(),
+        'python_executable': sys.executable,
+        'onnxruntime_version': _onnxruntime_installed_version() or '',
+    })
+
+
+def _is_probably_still_healthy():
+    """Cheap check: we previously recorded a healthy state AND the
+    in-process fast import still works AND the Python executable hasn't
+    changed (e.g. Blender upgrade). If yes, skip the thorough check
+    entirely on startup."""
+    state = _load_state()
+    if not state.get('healthy'):
+        return False
+    if state.get('python_executable') != sys.executable:
+        # Blender was upgraded or installed to a different location; re-check
+        return False
+    # Fast in-process import — if all 4 modules import OK, we're good
+    problems = _check_packages_fast()
+    if problems:
+        return False
+    return True
+
+
 # ── Status helpers (main thread only) ──────────────────────────────────────────
 
 def _set_status(status, message='', progress=-1.0):
-    """Set the global status and mark UI for redraw. Main thread only."""
     global _status, _status_message, _status_progress
     _status = status
     _status_message = message
@@ -131,8 +212,6 @@ def _set_status(status, message='', progress=-1.0):
 
 
 def _tag_ui_redraw():
-    """Mark all UI areas for redraw. Main thread only.
-    Background threads must schedule this via bpy.app.timers.register."""
     try:
         wm = bpy.context.window_manager
         if wm is None:
@@ -145,32 +224,21 @@ def _tag_ui_redraw():
 
 
 def _schedule_main_thread(fn, delay=0.0):
-    """Schedule a callable to run on the main thread via Blender's timer.
-    Returns None so the timer doesn't re-fire. Safe to call from any thread."""
     def _wrapped():
         try:
             fn()
         except Exception as e:
             print(f"[BG Remover] main-thread callback failed: {e}")
-        return None  # don't re-fire
+        return None
     bpy.app.timers.register(_wrapped, first_interval=delay)
 
 
 # ── Subprocess helpers ────────────────────────────────────────────────────────
 
 def _run_no_window(cmd, **kw):
-    """subprocess.run with CREATE_NO_WINDOW on Windows so pip doesn't flash
-    a console window on every call."""
     if os.name == 'nt':
         kw.setdefault('creationflags', 0x08000000)  # CREATE_NO_WINDOW
     return subprocess.run(cmd, **kw)
-
-
-def _popen_no_window(cmd, **kw):
-    """subprocess.Popen with CREATE_NO_WINDOW on Windows."""
-    if os.name == 'nt':
-        kw.setdefault('creationflags', 0x08000000)
-    return subprocess.Popen(cmd, **kw)
 
 
 def _refresh_sys_path():
@@ -184,7 +252,6 @@ def _refresh_sys_path():
 
 
 def _probe_import_subprocess(module_name):
-    """Spawn a subprocess to try importing a module. Returns (ok, stderr)."""
     try:
         result = _run_no_window(
             [sys.executable, '-c',
@@ -219,9 +286,8 @@ def _onnxruntime_installed_version():
 # ── Package checking ──────────────────────────────────────────────────────────
 
 def _check_packages_fast():
-    """Cheap in-process import probe. Safe to call from panel draw() because
-    it does NO subprocess work and completes in microseconds on repeat calls.
-    Returns list of (pip_name, error_str) for packages that fail to import."""
+    """Cheap in-process import probe. Completes in microseconds on success.
+    Safe for the main thread."""
     problems = []
     checks = [("onnxruntime", "onnxruntime"),
               ("numpy", "numpy"),
@@ -236,9 +302,7 @@ def _check_packages_fast():
 
 
 def _check_packages_thorough():
-    """Thorough check that includes subprocess probes. Takes 1-4 seconds
-    because each probe spawns a Python interpreter. NEVER call from draw() —
-    only from operators and background workers."""
+    """Subprocess-probe version. Takes 1-4 seconds. Never from draw()."""
     problems = []
     checks = [("onnxruntime", "onnxruntime"),
               ("numpy", "numpy"),
@@ -265,30 +329,6 @@ def _missing_names(problems):
     return [p[0] for p in problems]
 
 
-def _invalidate_cache():
-    """Call after any operation that may have changed installed packages."""
-    global _cache_valid
-    _cache_valid = False
-
-
-def _refresh_cache_thorough():
-    """Run the thorough check and update the cache. Blocking — call from
-    a background thread if you don't want to hang the UI."""
-    global _cached_problems, _cache_valid
-    problems = _check_packages_thorough()
-    _cached_problems = problems
-    _cache_valid = True
-
-
-def _get_cached_problems():
-    """Return the cached thorough-check result. Also fast-checks as a
-    fallback when the cache is stale, so the panel can always show
-    something meaningful."""
-    if _cache_valid and _cached_problems is not None:
-        return _cached_problems
-    return _check_packages_fast()
-
-
 # ── Install logic ─────────────────────────────────────────────────────────────
 
 def _format_install_error(problems):
@@ -312,10 +352,6 @@ def _format_install_error(problems):
             f"  1. Install Microsoft VC++ Redistributable: {VC_REDIST_URL}\n"
             "  2. Close Blender completely.\n"
             "  3. Re-open Blender and click Install Dependencies again.\n"
-            "\n"
-            "  If the error persists after installing VC++ redist, this is\n"
-            "  likely onnxruntime GitHub issue #24907. The addon pins\n"
-            "  onnxruntime to the last known-good version (1.20.1).\n"
         )
     elif 'numpy' in all_errs and 'multiarray' in all_errs:
         joined += (
@@ -328,7 +364,6 @@ def _format_install_error(problems):
 
 
 def _pip_install_blocking(args):
-    """Run pip install. Blocking — call from a worker thread."""
     cmd = [sys.executable, '-m', 'pip', 'install', '--user'] + args
     try:
         result = _run_no_window(cmd, capture_output=True, text=True, timeout=600)
@@ -350,9 +385,7 @@ def _pip_uninstall_blocking(pkg):
 
 
 def _install_deps_worker(force_ort=False):
-    """Background-thread install worker. Communicates with main thread via
-    _schedule_main_thread for status updates and final result.
-    Returns nothing; raises nothing — errors are stored in globals."""
+    """Background-thread install worker."""
     global _last_error, _last_error_detail
 
     def say(msg, progress=-1.0):
@@ -369,11 +402,9 @@ def _install_deps_worker(force_ort=False):
         ort_needs_pin = installed_ort and installed_ort != '1.20.1'
 
         if not problems and not ort_needs_pin and not force_ort:
-            # Nothing to do
             _schedule_main_thread(lambda: _on_install_done(None))
             return
 
-        # ensurepip (quiet)
         say('Ensuring pip is available…')
         try:
             _run_no_window(
@@ -406,8 +437,6 @@ def _install_deps_worker(force_ort=False):
                     f"Try running Blender as Administrator."
                 )
 
-            # When force-reinstalling onnxruntime with --no-deps, we also
-            # need to make sure its numpy dep is satisfied.
             if force_ort:
                 say('Ensuring numpy is installed…')
                 _pip_install_blocking(['--upgrade', 'numpy'])
@@ -436,7 +465,8 @@ def _install_deps_worker(force_ort=False):
                                    _on_install_done(m, problems=p))
             return
 
-        # Success
+        # Success — record it
+        _record_healthy_state()
         _schedule_main_thread(lambda: _on_install_done(None))
     except Exception as e:
         err_str = str(e)
@@ -444,19 +474,15 @@ def _install_deps_worker(force_ort=False):
 
 
 def _on_install_done(error_msg, problems=None):
-    """Main-thread callback after install worker finishes.
-    error_msg=None means success."""
+    """Main-thread callback after install worker finishes."""
     global _last_error, _cached_problems, _cache_valid, _work_thread
     _work_thread = None
 
     if error_msg is None:
         _last_error = None
-        # Refresh cache with fast check (fast enough on success; we know
-        # everything works now)
         _cached_problems = []
         _cache_valid = True
         _set_status('idle', '✅ Ready — dependencies installed!')
-        # Clear the success message after a few seconds
         _schedule_main_thread(lambda: _set_status('idle'), delay=4.0)
     else:
         _last_error = error_msg
@@ -464,21 +490,16 @@ def _on_install_done(error_msg, problems=None):
             _cached_problems = problems
             _cache_valid = True
         else:
-            # Installation failed before getting to verify step — refresh cache
-            _cached_problems = _check_packages_thorough()
+            # Don't block main thread for thorough re-check; use fast check
+            _cached_problems = _check_packages_fast()
             _cache_valid = True
         _set_status('idle', '')
 
 
-# Background thread handle so we don't start two at once
-_work_thread = None
-
-
 def _start_install_thread(force_ort=False):
-    """Kick off the install worker on a background thread."""
     global _work_thread
     if _work_thread is not None and _work_thread.is_alive():
-        return False  # already running
+        return False
     _set_status('installing', 'Starting…')
     _work_thread = threading.Thread(
         target=_install_deps_worker,
@@ -492,13 +513,9 @@ def _start_install_thread(force_ort=False):
 # ── Synchronous ensure_deps for the inference path ────────────────────────────
 
 def ensure_deps_sync():
-    """Synchronous version for use from remove_bg and other inference paths.
-    Blocks the caller. Does NOT go through the thread/status machinery.
-    Raises RuntimeError if deps can't be made to import."""
     problems = _check_packages_fast()
     if not problems:
         return True
-    # Delegate to the install worker but run its logic inline (blocking)
     missing = _missing_names(problems)
     installed_ort = _onnxruntime_installed_version()
     ort_needs_pin = installed_ort and installed_ort != '1.20.1'
@@ -532,6 +549,7 @@ def ensure_deps_sync():
         raise RuntimeError(
             f"Can't import {still[0][0]}: {still[0][1][:200]}"
         )
+    _record_healthy_state()
     return True
 
 
@@ -904,8 +922,6 @@ def remove_bg(pil_img, use_clean_mask=True):
     return Image.fromarray(rgba, 'RGBA')
 
 
-# ── Blender image helpers ─────────────────────────────────────────────────────
-
 def blender_image_to_pil(image):
     ensure_deps_sync()
     from PIL import Image
@@ -980,7 +996,7 @@ class BGRemover_OT_ForceReinstallOrt(bpy.types.Operator):
 
 
 class BGRemover_OT_Recheck(bpy.types.Operator):
-    """Re-run the thorough package check (updates the panel state)"""
+    """Re-run the thorough package check"""
     bl_idname = 'bgremover.recheck'
     bl_label = 'Recheck Packages'
 
@@ -992,18 +1008,22 @@ class BGRemover_OT_Recheck(bpy.types.Operator):
             try:
                 _cached_problems = _check_packages_thorough()
                 _cache_valid = True
+                if not _cached_problems:
+                    _record_healthy_state()
             finally:
                 _schedule_main_thread(lambda: _set_status('idle', ''))
 
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
+        threading.Thread(target=worker, daemon=True).start()
         return {'FINISHED'}
 
 
 class BGRemover_OT_Diagnostics(bpy.types.Operator):
-    """Write environment info to disk and the console."""
+    """Generate a detailed report of the Python environment, package
+    versions, and import errors. Use this when reporting a problem.
+    The report is saved to diagnostics.txt and can be opened from the
+    panel."""
     bl_idname = 'bgremover.diagnostics'
-    bl_label = 'Run Diagnostics'
+    bl_label = 'Copy Debug Info for Support'
 
     def execute(self, context):
         import platform
@@ -1080,15 +1100,20 @@ class BGRemover_OT_Diagnostics(bpy.types.Operator):
                     print(f"[BG Remover] Save failed: {e}")
             finally:
                 _schedule_main_thread(lambda: _set_status('idle', ''))
-                # Also refresh the cache since we just did a thorough probe
-                _schedule_main_thread(lambda: _refresh_cache_thorough())
+                # Refresh cache on a thread too (not main)
+                def refresh_worker():
+                    global _cached_problems, _cache_valid
+                    _cached_problems = _check_packages_thorough()
+                    _cache_valid = True
+                    _schedule_main_thread(_tag_ui_redraw)
+                threading.Thread(target=refresh_worker, daemon=True).start()
 
         threading.Thread(target=worker, daemon=True).start()
         return {'FINISHED'}
 
 
 class BGRemover_OT_OpenDiagnostics(bpy.types.Operator):
-    """Open the diagnostics.txt file in the system default text editor"""
+    """Open diagnostics.txt in the system default text editor"""
     bl_idname = 'bgremover.open_diagnostics'
     bl_label = 'Open Diagnostics File'
 
@@ -1125,7 +1150,6 @@ class BGRemover_OT_RemoveBackground(bpy.types.Operator):
     def execute(self, context):
         global _last_error
         _last_error = None
-
         image = context.area.spaces.active.image
         out_name = Path(image.name).stem + '_nobg'
         area = context.area
@@ -1157,7 +1181,6 @@ class BGRemover_OT_RemoveFromRender(bpy.types.Operator):
     def execute(self, context):
         global _last_error
         _last_error = None
-
         render_img = bpy.data.images['Render Result']
         out_name = 'Render_nobg'
 
@@ -1275,15 +1298,12 @@ class BGRemover_OT_OpenURL(bpy.types.Operator):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _status_icon():
-    """Return an appropriate icon for the current status."""
     if _status == 'installing' or _status == 'uninstalling':
-        return 'SORTTIME'  # looks like a wait/progress icon
+        return 'SORTTIME'
     if _status == 'checking':
         return 'VIEWZOOM'
     if _status == 'downloading':
         return 'IMPORT'
-    if _status == 'loading_session':
-        return 'FILE_REFRESH'
     return 'BLANK1'
 
 
@@ -1296,49 +1316,41 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        prefs = get_prefs(context)
 
-        # ── STATUS TAKES PRIORITY over everything else ───────────────────────
-        # If an operation is in progress, show that instead of stale errors
-        # or stale "setup required" boxes.
+        # ── WORKING STATE — priority over everything else ───────────────────
         if _status != 'idle':
             box = layout.box()
             box.label(text='Working…', icon=_status_icon())
             if _status_message:
-                # Wrap long messages by showing multiple label lines
                 msg = _status_message
                 while msg:
                     chunk, msg = msg[:42], msg[42:]
                     box.label(text=chunk, icon='BLANK1')
             if _status_progress >= 0.0:
-                # Show a textual progress bar (Blender has no native one)
                 filled = int(_status_progress * 20)
                 bar = '█' * filled + '░' * (20 - filled)
                 box.label(text=f"  {bar}  {int(_status_progress * 100)}%",
                           icon='BLANK1')
-            box.label(text='Blender stays responsive — this is a',
-                      icon='INFO')
-            box.label(text='background task.', icon='BLANK1')
+            box.label(text='Blender stays responsive.', icon='INFO')
             return
 
-        # ── IDLE — show the appropriate state ───────────────────────────────
-
-        # Briefly flash success message after install completes
+        # Flash success message briefly
         if _status_message:
             box = layout.box()
             box.label(text=_status_message, icon='CHECKMARK')
 
-        # Read from cache — NEVER compute in draw()
+        # ── INITIAL LOAD — briefly, while cache populates ───────────────────
         if not _cache_valid:
-            # First-time draw before the initial check has completed
             box = layout.box()
             box.label(text='Checking environment…', icon='VIEWZOOM')
-            box.label(text='One moment.', icon='BLANK1')
             return
 
         problems = _cached_problems or []
         missing = _missing_names(problems)
         model_exists = _model_path().is_file()
 
+        # ── PROBLEMS — setup required ───────────────────────────────────────
         if problems:
             box = layout.box()
             box.alert = True
@@ -1370,16 +1382,12 @@ class BGRemover_PT_Panel(bpy.types.Panel):
                                 icon='FILE_REFRESH')
 
             row = box.row(align=True)
-            row.operator('bgremover.install_deps', icon='IMPORT')
-            row.operator('bgremover.recheck', text='Recheck', icon='FILE_REFRESH')
-            row = box.row(align=True)
-            row.operator('bgremover.diagnostics', text='Diagnostics',
-                         icon='CONSOLE')
-            if _diagnostics_path().is_file():
-                row.operator('bgremover.open_diagnostics',
-                             text='Open File', icon='TEXT')
+            row.scale_y = 1.3
+            row.operator('bgremover.install_deps',
+                         text='Install Dependencies', icon='IMPORT')
             return
 
+        # ── MODEL DOWNLOAD NEEDED ───────────────────────────────────────────
         if not model_exists:
             box = layout.box()
             box.label(text='Model not downloaded', icon='IMPORT')
@@ -1388,6 +1396,7 @@ class BGRemover_PT_Panel(bpy.types.Panel):
                          text='Download Model', icon='URL')
             return
 
+        # ── READY STATE ─────────────────────────────────────────────────────
         if _session is not None:
             provider_short = (_session_provider or '').replace('ExecutionProvider', '')
             layout.label(text=f'✅ Ready ({provider_short})', icon='CHECKMARK')
@@ -1399,11 +1408,7 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             err_box.alert = True
             first_line = _last_error.strip().splitlines()[0][:60]
             err_box.label(text=f"Last error: {first_line}", icon='ERROR')
-            if _diagnostics_path().is_file():
-                err_box.operator('bgremover.open_diagnostics',
-                                 text='Open diagnostics.txt', icon='TEXT')
 
-        prefs = get_prefs(context)
         if prefs is not None:
             layout.prop(prefs, "use_clean_mask")
 
@@ -1428,12 +1433,21 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 
         layout.operator('bgremover.process_sequence', icon='SEQUENCE')
 
-        layout.separator()
-        row = layout.row(align=True)
-        row.operator('bgremover.recheck', text='Recheck', icon='FILE_REFRESH')
-        row.operator('bgremover.diagnostics', text='Diagnostics',
-                     icon='CONSOLE')
-        layout.operator('bgremover.clear_model', icon='TRASH')
+        # ── ADVANCED SECTION (collapsible via pref toggle) ──────────────────
+        if prefs and prefs.show_advanced:
+            layout.separator()
+            adv_box = layout.box()
+            adv_box.label(text='Advanced', icon='PREFERENCES')
+            row = adv_box.row(align=True)
+            row.operator('bgremover.recheck', text='Recheck', icon='FILE_REFRESH')
+            row.operator('bgremover.diagnostics', text='Debug Info',
+                         icon='CONSOLE')
+            if _diagnostics_path().is_file():
+                adv_box.operator('bgremover.open_diagnostics',
+                                 text='Open Debug Report', icon='TEXT')
+            adv_box.operator('bgremover.force_reinstall_ort',
+                             text='Reinstall onnxruntime', icon='FILE_REFRESH')
+            adv_box.operator('bgremover.clear_model', icon='TRASH')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1456,33 +1470,71 @@ classes = [
 ]
 
 
-def _initial_cache_refresh():
-    """Run a thorough check once on addon enable so the panel has
-    accurate state without needing the user to click anything."""
+def _startup_routine():
+    """Runs shortly after register. Uses persistent state to decide
+    whether to do a full thorough check (slow) or trust the last run (fast).
+
+    Flow:
+      1. If state says healthy AND fast import still works → cache valid, done. (instant)
+      2. Otherwise, run thorough check on a background thread.
+      3. After thorough check: if problems exist AND auto_install is on AND
+         we haven't tried this session, kick off install.
+      4. If problems exist but auto_install is off (or already tried), just
+         show the error state.
+    """
+    global _cached_problems, _cache_valid, _auto_install_attempted
+
+    # Fast path: previously healthy and fast import still works
+    if _is_probably_still_healthy():
+        _cached_problems = []
+        _cache_valid = True
+        _tag_ui_redraw()
+        print("[BG Remover] Healthy state cached from previous session — skipping full check.")
+        return None
+
+    # Slow path: run thorough check on a thread
     def worker():
+        global _cached_problems, _cache_valid, _auto_install_attempted
         try:
-            _refresh_cache_thorough()
-        finally:
-            _schedule_main_thread(lambda: _tag_ui_redraw())
+            problems = _check_packages_thorough()
+            _cached_problems = problems
+            _cache_valid = True
+            if not problems:
+                _record_healthy_state()
+                _schedule_main_thread(_tag_ui_redraw)
+                return
+
+            # Problems found. Check whether to auto-install.
+            prefs = get_prefs()
+            should_auto = (prefs is None or prefs.auto_install) and not _auto_install_attempted
+            if should_auto:
+                _auto_install_attempted = True
+                print("[BG Remover] Missing dependencies detected — auto-installing…")
+                _schedule_main_thread(lambda: _start_install_thread(force_ort=False))
+            else:
+                _schedule_main_thread(_tag_ui_redraw)
+        except Exception as e:
+            print(f"[BG Remover] Startup check failed: {e}")
+            _schedule_main_thread(_tag_ui_redraw)
+
     threading.Thread(target=worker, daemon=True).start()
-    return None  # don't re-fire as a timer
+    return None  # don't re-fire
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    # Schedule the initial package check AFTER register returns, so we don't
-    # block Blender startup. This means the panel briefly shows "Checking
-    # environment…" the first time it's drawn, then populates with real state.
-    bpy.app.timers.register(_initial_cache_refresh, first_interval=0.1)
+    bpy.app.timers.register(_startup_routine, first_interval=0.1)
 
 
 def unregister():
     global _session, _session_provider, _cached_problems, _cache_valid
+    global _auto_install_attempted
     _session = None
     _session_provider = None
     _cached_problems = None
     _cache_valid = False
+    _auto_install_attempted = False
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
