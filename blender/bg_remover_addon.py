@@ -18,7 +18,7 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (3, 1, 4),
+    "version": (3, 1, 5),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (ONNX Runtime, web-parity cleanMask)",
@@ -51,7 +51,6 @@ ONNXRUNTIME_SPEC = "onnxruntime==1.20.1"
 REQUIRED_PACKAGES_UNPINNED = ["numpy", "scipy", "Pillow"]
 VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
-# State file schema version — bump if the format changes
 _STATE_VERSION = 1
 
 
@@ -69,10 +68,7 @@ _status_progress = -1.0
 _cached_problems = None
 _cache_valid = False
 
-# Track whether we've already tried auto-install this session. Prevents
-# an install-failure loop where the panel keeps re-triggering install.
 _auto_install_attempted = False
-
 _work_thread = None
 
 
@@ -81,13 +77,15 @@ _work_thread = None
 class BGRemoverPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
+    # User-facing name: tells users what they get, not how it works.
+    # Default ON because the slower-but-cleaner result is what most want.
     use_clean_mask: bpy.props.BoolProperty(
-        name="Clean mask (match web version)",
+        name="Refine edges and remove noise",
         description=(
-            "Apply the same post-processing as the web version: K-means "
-            "background detection, sky handling, morphological cleanup, "
-            "and anti-aliased edges. Turn off for ~3x faster processing "
-            "with the raw AI mask (suitable for batch sequences)."
+            "Polish the AI mask after it's generated: smooth edges, drop "
+            "stray pixels, and clean up sky regions. Adds about 1 second "
+            "per image. Turn off only when speed matters more than quality "
+            "(e.g. processing hundreds of frames)."
         ),
         default=True,
     )
@@ -96,23 +94,30 @@ class BGRemoverPreferences(bpy.types.AddonPreferences):
         name="Auto-install dependencies on startup",
         description=(
             "If packages are missing when Blender starts, install them "
-            "automatically without requiring a button click. Turn off if "
-            "you want to manage installs yourself."
+            "automatically without requiring a button click."
         ),
         default=True,
     )
 
     show_advanced: bpy.props.BoolProperty(
-        name="Show advanced tools",
-        description="Show diagnostic tools and advanced options in the panel.",
+        name="Show advanced tools in panel",
+        description=(
+            "Show extra tools in the BG Remover panel: quality toggle, "
+            "recheck, debug info, force reinstall, and clear model cache."
+        ),
         default=False,
     )
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "use_clean_mask")
         layout.prop(self, "auto_install")
         layout.prop(self, "show_advanced")
+
+        # Quality option lives in its own labelled section.
+        layout.separator()
+        box = layout.box()
+        box.label(text="Output quality", icon='IMAGE_DATA')
+        box.prop(self, "use_clean_mask")
 
 
 def get_prefs(context=None):
@@ -144,10 +149,9 @@ def _state_path():
     return _addon_data_dir() / 'state.json'
 
 
-# ── Persistent state for fast startup ─────────────────────────────────────────
+# ── Persistent state ──────────────────────────────────────────────────────────
 
 def _load_state():
-    """Return dict of persisted state from last run, or {} if unavailable."""
     try:
         p = _state_path()
         if not p.is_file():
@@ -162,7 +166,6 @@ def _load_state():
 
 
 def _save_state(data):
-    """Persist state dict to disk. Silent on failure (best-effort)."""
     try:
         data = dict(data)
         data['version'] = _STATE_VERSION
@@ -173,8 +176,6 @@ def _save_state(data):
 
 
 def _record_healthy_state():
-    """Call after a successful thorough check confirms everything works.
-    Stores enough info that next startup can skip the thorough check."""
     _save_state({
         'healthy': True,
         'timestamp': time.time(),
@@ -184,24 +185,18 @@ def _record_healthy_state():
 
 
 def _is_probably_still_healthy():
-    """Cheap check: we previously recorded a healthy state AND the
-    in-process fast import still works AND the Python executable hasn't
-    changed (e.g. Blender upgrade). If yes, skip the thorough check
-    entirely on startup."""
     state = _load_state()
     if not state.get('healthy'):
         return False
     if state.get('python_executable') != sys.executable:
-        # Blender was upgraded or installed to a different location; re-check
         return False
-    # Fast in-process import — if all 4 modules import OK, we're good
     problems = _check_packages_fast()
     if problems:
         return False
     return True
 
 
-# ── Status helpers (main thread only) ──────────────────────────────────────────
+# ── Status helpers ────────────────────────────────────────────────────────────
 
 def _set_status(status, message='', progress=-1.0):
     global _status, _status_message, _status_progress
@@ -237,7 +232,7 @@ def _schedule_main_thread(fn, delay=0.0):
 
 def _run_no_window(cmd, **kw):
     if os.name == 'nt':
-        kw.setdefault('creationflags', 0x08000000)  # CREATE_NO_WINDOW
+        kw.setdefault('creationflags', 0x08000000)
     return subprocess.run(cmd, **kw)
 
 
@@ -286,8 +281,6 @@ def _onnxruntime_installed_version():
 # ── Package checking ──────────────────────────────────────────────────────────
 
 def _check_packages_fast():
-    """Cheap in-process import probe. Completes in microseconds on success.
-    Safe for the main thread."""
     problems = []
     checks = [("onnxruntime", "onnxruntime"),
               ("numpy", "numpy"),
@@ -302,7 +295,6 @@ def _check_packages_fast():
 
 
 def _check_packages_thorough():
-    """Subprocess-probe version. Takes 1-4 seconds. Never from draw()."""
     problems = []
     checks = [("onnxruntime", "onnxruntime"),
               ("numpy", "numpy"),
@@ -354,9 +346,7 @@ def _format_install_error(problems):
             "  3. Re-open Blender and click Install Dependencies again.\n"
         )
     elif 'numpy' in all_errs and 'multiarray' in all_errs:
-        joined += (
-            "\n\n→ numpy ABI mismatch. Click 'Force Reinstall onnxruntime'."
-        )
+        joined += "\n\n→ numpy ABI mismatch. Click 'Force Reinstall onnxruntime'."
     else:
         joined += "\n\nTry: restart Blender, then click Install Dependencies again."
 
@@ -385,7 +375,6 @@ def _pip_uninstall_blocking(pkg):
 
 
 def _install_deps_worker(force_ort=False):
-    """Background-thread install worker."""
     global _last_error, _last_error_detail
 
     def say(msg, progress=-1.0):
@@ -465,7 +454,6 @@ def _install_deps_worker(force_ort=False):
                                    _on_install_done(m, problems=p))
             return
 
-        # Success — record it
         _record_healthy_state()
         _schedule_main_thread(lambda: _on_install_done(None))
     except Exception as e:
@@ -474,7 +462,6 @@ def _install_deps_worker(force_ort=False):
 
 
 def _on_install_done(error_msg, problems=None):
-    """Main-thread callback after install worker finishes."""
     global _last_error, _cached_problems, _cache_valid, _work_thread
     _work_thread = None
 
@@ -490,7 +477,6 @@ def _on_install_done(error_msg, problems=None):
             _cached_problems = problems
             _cache_valid = True
         else:
-            # Don't block main thread for thorough re-check; use fast check
             _cached_problems = _check_packages_fast()
             _cache_valid = True
         _set_status('idle', '')
@@ -509,8 +495,6 @@ def _start_install_thread(force_ort=False):
     _work_thread.start()
     return True
 
-
-# ── Synchronous ensure_deps for the inference path ────────────────────────────
 
 def ensure_deps_sync():
     problems = _check_packages_fast()
@@ -963,8 +947,7 @@ def _use_clean_mask(context):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class BGRemover_OT_InstallDeps(bpy.types.Operator):
-    """Install onnxruntime==1.20.1 + numpy + scipy + Pillow in a background
-    thread so Blender stays responsive. Watch the panel for progress."""
+    """Install onnxruntime + numpy + scipy + Pillow in a background thread"""
     bl_idname = 'bgremover.install_deps'
     bl_label = 'Install Dependencies'
 
@@ -980,7 +963,7 @@ class BGRemover_OT_InstallDeps(bpy.types.Operator):
 
 
 class BGRemover_OT_ForceReinstallOrt(bpy.types.Operator):
-    """Force-reinstall onnxruntime 1.20.1 in a background thread."""
+    """Force-reinstall onnxruntime 1.20.1 in a background thread"""
     bl_idname = 'bgremover.force_reinstall_ort'
     bl_label = 'Force Reinstall onnxruntime 1.20.1'
 
@@ -1019,9 +1002,7 @@ class BGRemover_OT_Recheck(bpy.types.Operator):
 
 class BGRemover_OT_Diagnostics(bpy.types.Operator):
     """Generate a detailed report of the Python environment, package
-    versions, and import errors. Use this when reporting a problem.
-    The report is saved to diagnostics.txt and can be opened from the
-    panel."""
+    versions, and import errors. Use this when reporting a problem."""
     bl_idname = 'bgremover.diagnostics'
     bl_label = 'Copy Debug Info for Support'
 
@@ -1100,7 +1081,6 @@ class BGRemover_OT_Diagnostics(bpy.types.Operator):
                     print(f"[BG Remover] Save failed: {e}")
             finally:
                 _schedule_main_thread(lambda: _set_status('idle', ''))
-                # Refresh cache on a thread too (not main)
                 def refresh_worker():
                     global _cached_problems, _cache_valid
                     _cached_problems = _check_packages_thorough()
@@ -1335,12 +1315,10 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             box.label(text='Blender stays responsive.', icon='INFO')
             return
 
-        # Flash success message briefly
         if _status_message:
             box = layout.box()
             box.label(text=_status_message, icon='CHECKMARK')
 
-        # ── INITIAL LOAD — briefly, while cache populates ───────────────────
         if not _cache_valid:
             box = layout.box()
             box.label(text='Checking environment…', icon='VIEWZOOM')
@@ -1350,7 +1328,7 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         missing = _missing_names(problems)
         model_exists = _model_path().is_file()
 
-        # ── PROBLEMS — setup required ───────────────────────────────────────
+        # ── PROBLEMS ────────────────────────────────────────────────────────
         if problems:
             box = layout.box()
             box.alert = True
@@ -1387,7 +1365,6 @@ class BGRemover_PT_Panel(bpy.types.Panel):
                          text='Install Dependencies', icon='IMPORT')
             return
 
-        # ── MODEL DOWNLOAD NEEDED ───────────────────────────────────────────
         if not model_exists:
             box = layout.box()
             box.label(text='Model not downloaded', icon='IMPORT')
@@ -1409,8 +1386,9 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             first_line = _last_error.strip().splitlines()[0][:60]
             err_box.label(text=f"Last error: {first_line}", icon='ERROR')
 
-        if prefs is not None:
-            layout.prop(prefs, "use_clean_mask")
+        # NOTE: "Refine edges and remove noise" toggle is intentionally
+        # NOT shown in the main panel — it lives in addon prefs and the
+        # Advanced section. Default is on; most users never need it.
 
         layout.separator()
 
@@ -1433,11 +1411,15 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 
         layout.operator('bgremover.process_sequence', icon='SEQUENCE')
 
-        # ── ADVANCED SECTION (collapsible via pref toggle) ──────────────────
+        # ── ADVANCED SECTION (only when enabled in prefs) ───────────────────
         if prefs and prefs.show_advanced:
             layout.separator()
             adv_box = layout.box()
             adv_box.label(text='Advanced', icon='PREFERENCES')
+
+            # The quality toggle that used to live in the main view
+            adv_box.prop(prefs, "use_clean_mask")
+
             row = adv_box.row(align=True)
             row.operator('bgremover.recheck', text='Recheck', icon='FILE_REFRESH')
             row.operator('bgremover.diagnostics', text='Debug Info',
@@ -1471,20 +1453,8 @@ classes = [
 
 
 def _startup_routine():
-    """Runs shortly after register. Uses persistent state to decide
-    whether to do a full thorough check (slow) or trust the last run (fast).
-
-    Flow:
-      1. If state says healthy AND fast import still works → cache valid, done. (instant)
-      2. Otherwise, run thorough check on a background thread.
-      3. After thorough check: if problems exist AND auto_install is on AND
-         we haven't tried this session, kick off install.
-      4. If problems exist but auto_install is off (or already tried), just
-         show the error state.
-    """
     global _cached_problems, _cache_valid, _auto_install_attempted
 
-    # Fast path: previously healthy and fast import still works
     if _is_probably_still_healthy():
         _cached_problems = []
         _cache_valid = True
@@ -1492,7 +1462,6 @@ def _startup_routine():
         print("[BG Remover] Healthy state cached from previous session — skipping full check.")
         return None
 
-    # Slow path: run thorough check on a thread
     def worker():
         global _cached_problems, _cache_valid, _auto_install_attempted
         try:
@@ -1504,7 +1473,6 @@ def _startup_routine():
                 _schedule_main_thread(_tag_ui_redraw)
                 return
 
-            # Problems found. Check whether to auto-install.
             prefs = get_prefs()
             should_auto = (prefs is None or prefs.auto_install) and not _auto_install_attempted
             if should_auto:
@@ -1518,7 +1486,7 @@ def _startup_routine():
             _schedule_main_thread(_tag_ui_redraw)
 
     threading.Thread(target=worker, daemon=True).start()
-    return None  # don't re-fire
+    return None
 
 
 def register():
