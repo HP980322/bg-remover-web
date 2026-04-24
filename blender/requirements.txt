@@ -1,8 +1,19 @@
-fastapi>=0.110
-uvicorn[standard]>=0.27
-python-multipart>=0.0.9
-Pillow>=10.0
-numpy>=1.24,<2.0
-torch>=2.0
-torchvision>=0.15
-transformers>=4.40,<5.0
+# BG Remover Blender addon — Python dependencies
+#
+# These packages are installed AUTOMATICALLY by the addon into Blender's
+# bundled Python on first enable (or when missing). You do NOT normally
+# need to install anything yourself.
+#
+# This file exists for reference, and so you can do a manual install if
+# you ever need to:
+#
+#   "<blender>\python\bin\python.exe" -m pip install --user -r requirements.txt
+#
+# The onnxruntime version is pinned because onnxruntime 1.21+ has a known
+# DLL initialization regression on some Windows installs. 1.20.1 is the
+# last release tested working everywhere.
+
+onnxruntime==1.20.1
+numpy
+scipy
+Pillow
