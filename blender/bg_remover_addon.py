@@ -18,7 +18,7 @@
 bl_info = {
     "name": "BG Remover",
     "author": "HP980322",
-    "version": (3, 1, 2),
+    "version": (3, 1, 3),
     "blender": (3, 0, 0),
     "location": "Image Editor > Sidebar > BG Remover",
     "description": "Remove image/render background using RMBG-1.4 AI (ONNX Runtime, web-parity cleanMask)",
@@ -31,6 +31,7 @@ import sys
 import site
 import shutil
 import tempfile
+import threading
 import importlib
 import subprocess
 import urllib.request
@@ -44,17 +45,8 @@ MODEL_URL = "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx
 MODEL_FILENAME = "rmbg_1_4.onnx"
 MODEL_INPUT_SIZE = 1024
 
-# onnxruntime pinned to 1.20.1 — the last version before the DLL-loading
-# regression that appeared in 1.22.x (and lingering issues in 1.21.x).
-# See microsoft/onnxruntime issues #24907, #21270: 1.22+ no longer
-# searches PATH for runtime DLLs and fails to init with
-# "A dynamic link library (DLL) initialization routine failed"
-# even with the latest VC++ redist installed.
 ONNXRUNTIME_SPEC = "onnxruntime==1.20.1"
-
-# scipy/numpy/Pillow don't need pinning — any recent version works.
 REQUIRED_PACKAGES_UNPINNED = ["numpy", "scipy", "Pillow"]
-
 VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
 
@@ -64,6 +56,22 @@ _session = None
 _session_provider = None
 _last_error = None
 _last_error_detail = None
+
+# Status state machine — panel reads these, workers set them.
+#   'idle'             — nothing in progress
+#   'checking'         — running the thorough subprocess import probe
+#   'installing'       — pip install is running
+#   'uninstalling'     — pip uninstall is running
+#   'downloading'      — downloading the ONNX model
+#   'loading_session'  — opening the ONNX InferenceSession
+_status = 'idle'
+_status_message = ''
+_status_progress = -1.0  # 0.0–1.0 for known-length ops, -1.0 for indeterminate
+
+# Cached result of the thorough check. None = not yet checked.
+# Panel's draw() reads this; it does NOT trigger a check itself.
+_cached_problems = None
+_cache_valid = False  # gets set to True after the initial check completes
 
 
 # ── Addon Preferences ─────────────────────────────────────────────────────────
@@ -111,6 +119,43 @@ def _diagnostics_path():
     return _addon_data_dir() / 'diagnostics.txt'
 
 
+# ── Status helpers (main thread only) ──────────────────────────────────────────
+
+def _set_status(status, message='', progress=-1.0):
+    """Set the global status and mark UI for redraw. Main thread only."""
+    global _status, _status_message, _status_progress
+    _status = status
+    _status_message = message
+    _status_progress = progress
+    _tag_ui_redraw()
+
+
+def _tag_ui_redraw():
+    """Mark all UI areas for redraw. Main thread only.
+    Background threads must schedule this via bpy.app.timers.register."""
+    try:
+        wm = bpy.context.window_manager
+        if wm is None:
+            return
+        for window in wm.windows:
+            for area in window.screen.areas:
+                area.tag_redraw()
+    except Exception:
+        pass
+
+
+def _schedule_main_thread(fn, delay=0.0):
+    """Schedule a callable to run on the main thread via Blender's timer.
+    Returns None so the timer doesn't re-fire. Safe to call from any thread."""
+    def _wrapped():
+        try:
+            fn()
+        except Exception as e:
+            print(f"[BG Remover] main-thread callback failed: {e}")
+        return None  # don't re-fire
+    bpy.app.timers.register(_wrapped, first_interval=delay)
+
+
 # ── Subprocess helpers ────────────────────────────────────────────────────────
 
 def _run_no_window(cmd, **kw):
@@ -119,6 +164,13 @@ def _run_no_window(cmd, **kw):
     if os.name == 'nt':
         kw.setdefault('creationflags', 0x08000000)  # CREATE_NO_WINDOW
     return subprocess.run(cmd, **kw)
+
+
+def _popen_no_window(cmd, **kw):
+    """subprocess.Popen with CREATE_NO_WINDOW on Windows."""
+    if os.name == 'nt':
+        kw.setdefault('creationflags', 0x08000000)
+    return subprocess.Popen(cmd, **kw)
 
 
 def _refresh_sys_path():
@@ -132,9 +184,7 @@ def _refresh_sys_path():
 
 
 def _probe_import_subprocess(module_name):
-    """Spawn a subprocess to try importing a module. Returns (ok, stderr).
-    This surfaces loader errors (DLL load failed + DLL name) that importlib
-    sometimes hides inside this process."""
+    """Spawn a subprocess to try importing a module. Returns (ok, stderr)."""
     try:
         result = _run_no_window(
             [sys.executable, '-c',
@@ -151,7 +201,6 @@ def _probe_import_subprocess(module_name):
 
 
 def _onnxruntime_installed_version():
-    """Return installed onnxruntime version via pip show, or None."""
     try:
         result = _run_no_window(
             [sys.executable, '-m', 'pip', 'show', 'onnxruntime'],
@@ -169,18 +218,33 @@ def _onnxruntime_installed_version():
 
 # ── Package checking ──────────────────────────────────────────────────────────
 
-def _check_packages():
-    """Return list of (pip_name, import_error_str). Each entry is a package
-    that either can't be imported in-process OR can't be imported via
-    subprocess (which catches DLL init failures that importlib silently
-    swallows)."""
+def _check_packages_fast():
+    """Cheap in-process import probe. Safe to call from panel draw() because
+    it does NO subprocess work and completes in microseconds on repeat calls.
+    Returns list of (pip_name, error_str) for packages that fail to import."""
     problems = []
     checks = [("onnxruntime", "onnxruntime"),
               ("numpy", "numpy"),
               ("scipy", "scipy"),
               ("Pillow", "PIL")]
     for pip_name, import_name in checks:
-        # Step 1: in-process import
+        try:
+            importlib.import_module(import_name)
+        except Exception as e:
+            problems.append((pip_name, f"{type(e).__name__}: {e}"))
+    return problems
+
+
+def _check_packages_thorough():
+    """Thorough check that includes subprocess probes. Takes 1-4 seconds
+    because each probe spawns a Python interpreter. NEVER call from draw() —
+    only from operators and background workers."""
+    problems = []
+    checks = [("onnxruntime", "onnxruntime"),
+              ("numpy", "numpy"),
+              ("scipy", "scipy"),
+              ("Pillow", "PIL")]
+    for pip_name, import_name in checks:
         if import_name in sys.modules:
             del sys.modules[import_name]
         in_process_err = None
@@ -189,12 +253,8 @@ def _check_packages():
         except Exception as e:
             in_process_err = f"{type(e).__name__}: {e}"
 
-        # Step 2: subprocess probe (catches DLL init failures the in-process
-        # importer may miss or reformat). If subprocess fails, we trust that.
         ok, out = _probe_import_subprocess(import_name)
         if not ok:
-            # Prefer the subprocess error — it's the authoritative one from
-            # the OS loader.
             problems.append((pip_name, (out or in_process_err or 'unknown').strip()))
         elif in_process_err is not None:
             problems.append((pip_name, in_process_err))
@@ -203,6 +263,30 @@ def _check_packages():
 
 def _missing_names(problems):
     return [p[0] for p in problems]
+
+
+def _invalidate_cache():
+    """Call after any operation that may have changed installed packages."""
+    global _cache_valid
+    _cache_valid = False
+
+
+def _refresh_cache_thorough():
+    """Run the thorough check and update the cache. Blocking — call from
+    a background thread if you don't want to hang the UI."""
+    global _cached_problems, _cache_valid
+    problems = _check_packages_thorough()
+    _cached_problems = problems
+    _cache_valid = True
+
+
+def _get_cached_problems():
+    """Return the cached thorough-check result. Also fast-checks as a
+    fallback when the cache is stale, so the panel can always show
+    something meaningful."""
+    if _cache_valid and _cached_problems is not None:
+        return _cached_problems
+    return _check_packages_fast()
 
 
 # ── Install logic ─────────────────────────────────────────────────────────────
@@ -217,30 +301,25 @@ def _format_install_error(problems):
     joined = "\n".join(lines)
 
     all_errs = " ".join(err for _, err in problems).lower()
-    # Windows DLL init failure — most common, show targeted fix
+    full_err = " ".join(err for _, err in problems)
     if os.name == 'nt' and (
         'dll load failed' in all_errs or
         'dynamic link library' in all_errs or
-        '动态链接库' in " ".join(err for _, err in problems)
+        '动态链接库' in full_err
     ):
         joined += (
             "\n\n→ Windows DLL initialization failed.\n"
             f"  1. Install Microsoft VC++ Redistributable: {VC_REDIST_URL}\n"
-            "  2. Close Blender completely (quit the program entirely).\n"
+            "  2. Close Blender completely.\n"
             "  3. Re-open Blender and click Install Dependencies again.\n"
             "\n"
             "  If the error persists after installing VC++ redist, this is\n"
-            "  likely a known onnxruntime regression (issue #24907 on\n"
-            "  microsoft/onnxruntime). The addon already pins onnxruntime\n"
-            "  to the last known-good version (1.20.1) but if a newer\n"
-            "  version got installed, click Install Dependencies again to\n"
-            "  force the pin."
+            "  likely onnxruntime GitHub issue #24907. The addon pins\n"
+            "  onnxruntime to the last known-good version (1.20.1).\n"
         )
     elif 'numpy' in all_errs and 'multiarray' in all_errs:
         joined += (
-            "\n\n→ numpy ABI mismatch. Try:\n"
-            f"  {sys.executable} -m pip install --user --force-reinstall "
-            f"{ONNXRUNTIME_SPEC} numpy"
+            "\n\n→ numpy ABI mismatch. Click 'Force Reinstall onnxruntime'."
         )
     else:
         joined += "\n\nTry: restart Blender, then click Install Dependencies again."
@@ -248,8 +327,8 @@ def _format_install_error(problems):
     return joined
 
 
-def _pip_install(args):
-    """Run pip install with given args. Returns (ok, combined_output)."""
+def _pip_install_blocking(args):
+    """Run pip install. Blocking — call from a worker thread."""
     cmd = [sys.executable, '-m', 'pip', 'install', '--user'] + args
     try:
         result = _run_no_window(cmd, capture_output=True, text=True, timeout=600)
@@ -260,7 +339,7 @@ def _pip_install(args):
         return False, f"{type(e).__name__}: {e}"
 
 
-def _pip_uninstall(pkg):
+def _pip_uninstall_blocking(pkg):
     try:
         _run_no_window(
             [sys.executable, '-m', 'pip', 'uninstall', '-y', pkg],
@@ -270,96 +349,202 @@ def _pip_uninstall(pkg):
         pass
 
 
-def ensure_deps():
-    """Install missing packages into Blender's Python. Handles the onnxruntime
-    version pin specifically: if a different version is already installed,
-    uninstall it before reinstalling."""
-    global _last_error_detail
+def _install_deps_worker(force_ort=False):
+    """Background-thread install worker. Communicates with main thread via
+    _schedule_main_thread for status updates and final result.
+    Returns nothing; raises nothing — errors are stored in globals."""
+    global _last_error, _last_error_detail
 
-    problems = _check_packages()
-    missing_names_initial = _missing_names(problems)
+    def say(msg, progress=-1.0):
+        _schedule_main_thread(
+            lambda m=msg, p=progress: _set_status('installing', m, p)
+        )
 
-    # If onnxruntime is installed but at the wrong version, force-swap it
+    try:
+        say('Checking installed packages…')
+        problems = _check_packages_thorough()
+        missing = _missing_names(problems)
+
+        installed_ort = _onnxruntime_installed_version()
+        ort_needs_pin = installed_ort and installed_ort != '1.20.1'
+
+        if not problems and not ort_needs_pin and not force_ort:
+            # Nothing to do
+            _schedule_main_thread(lambda: _on_install_done(None))
+            return
+
+        # ensurepip (quiet)
+        say('Ensuring pip is available…')
+        try:
+            _run_no_window(
+                [sys.executable, '-m', 'ensurepip', '--upgrade'],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception:
+            pass
+
+        if force_ort or ort_needs_pin or 'onnxruntime' in missing:
+            say(f'Uninstalling existing onnxruntime '
+                f'({installed_ort or "none"})…')
+            _pip_uninstall_blocking('onnxruntime')
+
+        install_list = []
+        if force_ort or 'onnxruntime' in missing or ort_needs_pin:
+            install_list.append(ONNXRUNTIME_SPEC)
+        for pkg in REQUIRED_PACKAGES_UNPINNED:
+            if pkg in missing:
+                install_list.append(pkg)
+
+        if install_list:
+            say(f'Installing: {", ".join(install_list)}… (up to 2 min)')
+            args = ['--upgrade'] + (['--force-reinstall', '--no-deps']
+                                     if force_ort else []) + install_list
+            ok, output = _pip_install_blocking(args)
+            if not ok:
+                raise RuntimeError(
+                    f"pip install failed:\n{output[-1500:]}\n\n"
+                    f"Try running Blender as Administrator."
+                )
+
+            # When force-reinstalling onnxruntime with --no-deps, we also
+            # need to make sure its numpy dep is satisfied.
+            if force_ort:
+                say('Ensuring numpy is installed…')
+                _pip_install_blocking(['--upgrade', 'numpy'])
+
+        _refresh_sys_path()
+
+        say('Verifying imports…')
+        still_problems = _check_packages_thorough()
+        if still_problems:
+            detail = _format_install_error(still_problems)
+            try:
+                with open(_diagnostics_path(), 'w', encoding='utf-8') as f:
+                    f.write("[BG Remover] Install succeeded but imports fail\n")
+                    f.write("=" * 70 + "\n")
+                    f.write(detail + "\n")
+            except Exception:
+                pass
+
+            _last_error_detail = detail
+            first = still_problems[0]
+            err_msg = (
+                f"Installed {first[0]} but can't import it. "
+                f"See diagnostics.txt for details."
+            )
+            _schedule_main_thread(lambda m=err_msg, p=still_problems:
+                                   _on_install_done(m, problems=p))
+            return
+
+        # Success
+        _schedule_main_thread(lambda: _on_install_done(None))
+    except Exception as e:
+        err_str = str(e)
+        _schedule_main_thread(lambda m=err_str: _on_install_done(m))
+
+
+def _on_install_done(error_msg, problems=None):
+    """Main-thread callback after install worker finishes.
+    error_msg=None means success."""
+    global _last_error, _cached_problems, _cache_valid, _work_thread
+    _work_thread = None
+
+    if error_msg is None:
+        _last_error = None
+        # Refresh cache with fast check (fast enough on success; we know
+        # everything works now)
+        _cached_problems = []
+        _cache_valid = True
+        _set_status('idle', '✅ Ready — dependencies installed!')
+        # Clear the success message after a few seconds
+        _schedule_main_thread(lambda: _set_status('idle'), delay=4.0)
+    else:
+        _last_error = error_msg
+        if problems is not None:
+            _cached_problems = problems
+            _cache_valid = True
+        else:
+            # Installation failed before getting to verify step — refresh cache
+            _cached_problems = _check_packages_thorough()
+            _cache_valid = True
+        _set_status('idle', '')
+
+
+# Background thread handle so we don't start two at once
+_work_thread = None
+
+
+def _start_install_thread(force_ort=False):
+    """Kick off the install worker on a background thread."""
+    global _work_thread
+    if _work_thread is not None and _work_thread.is_alive():
+        return False  # already running
+    _set_status('installing', 'Starting…')
+    _work_thread = threading.Thread(
+        target=_install_deps_worker,
+        kwargs={'force_ort': force_ort},
+        daemon=True,
+    )
+    _work_thread.start()
+    return True
+
+
+# ── Synchronous ensure_deps for the inference path ────────────────────────────
+
+def ensure_deps_sync():
+    """Synchronous version for use from remove_bg and other inference paths.
+    Blocks the caller. Does NOT go through the thread/status machinery.
+    Raises RuntimeError if deps can't be made to import."""
+    problems = _check_packages_fast()
+    if not problems:
+        return True
+    # Delegate to the install worker but run its logic inline (blocking)
+    missing = _missing_names(problems)
     installed_ort = _onnxruntime_installed_version()
     ort_needs_pin = installed_ort and installed_ort != '1.20.1'
 
-    if not problems and not ort_needs_pin:
-        return True
-
-    python = sys.executable
-
     try:
-        subprocess.check_call(
-            [python, '-m', 'ensurepip', '--upgrade'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        _run_no_window(
+            [sys.executable, '-m', 'ensurepip', '--upgrade'],
+            capture_output=True, text=True, timeout=120,
         )
     except Exception:
         pass
 
-    # If onnxruntime is installed but wrong version, or failed to import,
-    # uninstall first so pip doesn't treat the install as already-satisfied.
-    if ort_needs_pin or any(n == 'onnxruntime' for n in missing_names_initial):
-        print(f"[BG Remover] Removing existing onnxruntime "
-              f"(version {installed_ort or '?'}) before reinstalling pinned 1.20.1")
-        _pip_uninstall('onnxruntime')
+    if ort_needs_pin or 'onnxruntime' in missing:
+        _pip_uninstall_blocking('onnxruntime')
 
-    # Build install list
     install_list = []
-    if any(n == 'onnxruntime' for n in missing_names_initial) or ort_needs_pin:
+    if 'onnxruntime' in missing or ort_needs_pin:
         install_list.append(ONNXRUNTIME_SPEC)
     for pkg in REQUIRED_PACKAGES_UNPINNED:
-        if pkg in missing_names_initial:
+        if pkg in missing:
             install_list.append(pkg)
 
     if install_list:
-        print(f"[BG Remover] Installing: {', '.join(install_list)}")
-        ok, output = _pip_install(['--upgrade'] + install_list)
+        ok, output = _pip_install_blocking(['--upgrade'] + install_list)
         if not ok:
-            raise RuntimeError(
-                f"pip install failed:\n{output[-1500:]}\n\n"
-                f"Try running Blender as Administrator (Windows), or install "
-                f"manually:\n  {python} -m pip install --user "
-                f"{' '.join(install_list)}"
-            )
+            raise RuntimeError(f"pip install failed:\n{output[-1500:]}")
 
     _refresh_sys_path()
-
-    still_problems = _check_packages()
-    if still_problems:
-        detail = _format_install_error(still_problems)
-        # Persist to file so we don't lose it to console scrollback
-        try:
-            with open(_diagnostics_path(), 'w', encoding='utf-8') as f:
-                f.write("[BG Remover] Install succeeded but imports fail\n")
-                f.write("=" * 70 + "\n")
-                f.write(detail + "\n")
-        except Exception:
-            pass
-
-        print(f"[BG Remover] ────── Install succeeded but imports fail ──────")
-        print(detail)
-        print(f"[BG Remover] ──────────────────────────────────────────────────")
-        print(f"[BG Remover] Detail also saved to: {_diagnostics_path()}")
-
-        _last_error_detail = detail
-        first_failing = still_problems[0]
+    still = _check_packages_fast()
+    if still:
         raise RuntimeError(
-            f"Can't import {first_failing[0]}. "
-            f"See {_diagnostics_path()} for details."
+            f"Can't import {still[0][0]}: {still[0][1][:200]}"
         )
     return True
 
 
 # ── Model download ────────────────────────────────────────────────────────────
 
-def _download_with_progress(url, dst_path):
+def _download_with_progress(url, dst_path, status_cb=None):
     tmp_path = dst_path.with_suffix('.part')
     print(f"[BG Remover] Downloading RMBG-1.4 ONNX model (~176 MB) from {url}")
-    last_report = 0
     try:
         with urllib.request.urlopen(url, timeout=60) as resp:
             total = int(resp.headers.get('Content-Length', 0))
             downloaded = 0
+            last_report_pct = -1
             with open(tmp_path, 'wb') as f:
                 while True:
                     chunk = resp.read(1024 * 256)
@@ -367,11 +552,16 @@ def _download_with_progress(url, dst_path):
                         break
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total and downloaded - last_report > 5 * 1024 * 1024:
-                        pct = 100 * downloaded // total
-                        mb = downloaded / (1024 * 1024)
-                        print(f"[BG Remover] {pct}% ({mb:.1f} MB)")
-                        last_report = downloaded
+                    if total > 0:
+                        pct = int(100 * downloaded / total)
+                        progress = downloaded / total
+                        if pct != last_report_pct and pct % 2 == 0:
+                            mb = downloaded / (1024 * 1024)
+                            msg = f"Downloading model: {pct}% ({mb:.0f} MB)"
+                            print(f"[BG Remover] {msg}")
+                            if status_cb:
+                                status_cb(msg, progress)
+                            last_report_pct = pct
         tmp_path.rename(dst_path)
         print(f"[BG Remover] Model saved to {dst_path}")
     except Exception:
@@ -396,7 +586,7 @@ def get_session():
     if _session is not None:
         return _session
 
-    ensure_deps()
+    ensure_deps_sync()
     model_path = ensure_model()
 
     import onnxruntime as ort
@@ -415,8 +605,6 @@ def get_session():
 
 # ══════════════════════════════════════════════════════════════════════════════
 # cleanMask v16 — Python port of the JS function in index.html.
-# Produces byte-identical output to the web version (verified against the
-# JS reference on 150,000+ test pixels).
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _cleanmask_apply(mask_u8, src_rgb):
@@ -719,7 +907,7 @@ def remove_bg(pil_img, use_clean_mask=True):
 # ── Blender image helpers ─────────────────────────────────────────────────────
 
 def blender_image_to_pil(image):
-    ensure_deps()
+    ensure_deps_sync()
     from PIL import Image
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
         tmp = tf.name
@@ -759,107 +947,143 @@ def _use_clean_mask(context):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class BGRemover_OT_InstallDeps(bpy.types.Operator):
-    """Install onnxruntime==1.20.1 + numpy + scipy + Pillow into Blender's
-    Python, then download the RMBG-1.4 ONNX model (~176 MB)."""
+    """Install onnxruntime==1.20.1 + numpy + scipy + Pillow in a background
+    thread so Blender stays responsive. Watch the panel for progress."""
     bl_idname = 'bgremover.install_deps'
     bl_label = 'Install Dependencies'
 
     def execute(self, context):
-        global _last_error, _last_error_detail
+        global _last_error
         _last_error = None
-        _last_error_detail = None
-        try:
-            self.report({'INFO'}, 'Installing packages…')
-            ensure_deps()
-            self.report({'INFO'}, 'Downloading model if needed…')
-            ensure_model()
-            get_session()
-            self.report({'INFO'}, '✅ Ready!')
-        except Exception as e:
-            _last_error = str(e)
-            self.report({'ERROR'}, str(e))
+        started = _start_install_thread(force_ort=False)
+        if not started:
+            self.report({'WARNING'}, 'Install already in progress.')
             return {'CANCELLED'}
+        self.report({'INFO'}, 'Installing in background — see panel for progress.')
+        return {'FINISHED'}
+
+
+class BGRemover_OT_ForceReinstallOrt(bpy.types.Operator):
+    """Force-reinstall onnxruntime 1.20.1 in a background thread."""
+    bl_idname = 'bgremover.force_reinstall_ort'
+    bl_label = 'Force Reinstall onnxruntime 1.20.1'
+
+    def execute(self, context):
+        global _last_error
+        _last_error = None
+        started = _start_install_thread(force_ort=True)
+        if not started:
+            self.report({'WARNING'}, 'Install already in progress.')
+            return {'CANCELLED'}
+        self.report({'INFO'}, 'Reinstalling in background — see panel for progress.')
+        return {'FINISHED'}
+
+
+class BGRemover_OT_Recheck(bpy.types.Operator):
+    """Re-run the thorough package check (updates the panel state)"""
+    bl_idname = 'bgremover.recheck'
+    bl_label = 'Recheck Packages'
+
+    def execute(self, context):
+        _set_status('checking', 'Checking packages…')
+
+        def worker():
+            global _cached_problems, _cache_valid
+            try:
+                _cached_problems = _check_packages_thorough()
+                _cache_valid = True
+            finally:
+                _schedule_main_thread(lambda: _set_status('idle', ''))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
         return {'FINISHED'}
 
 
 class BGRemover_OT_Diagnostics(bpy.types.Operator):
-    """Write environment info to disk and the console. The saved file
-    can be opened from the panel to copy-paste its contents."""
+    """Write environment info to disk and the console."""
     bl_idname = 'bgremover.diagnostics'
     bl_label = 'Run Diagnostics'
 
     def execute(self, context):
         import platform
+        _set_status('checking', 'Running diagnostics…')
 
-        lines = []
+        def worker():
+            lines = []
 
-        def out(s=''):
-            lines.append(s)
-            print(s)
+            def out(s=''):
+                lines.append(s)
+                print(s)
 
-        out("=" * 70)
-        out("[BG Remover] DIAGNOSTICS")
-        out("=" * 70)
-        out(f"Addon version:       {bl_info['version']}")
-        out(f"Blender version:     {bpy.app.version_string}")
-        out(f"Platform:            {platform.platform()}")
-        out(f"Python executable:   {sys.executable}")
-        out(f"Python version:      {sys.version.splitlines()[0]}")
-        out(f"User site-packages:  {site.getusersitepackages()}")
-        out(f"Addon data dir:      {_addon_data_dir()}")
-        out(f"Model file:          {_model_path()}")
-        mp = _model_path()
-        if mp.is_file():
-            out(f"  Model size:        {mp.stat().st_size / 1024 / 1024:.1f} MB")
-        else:
-            out(f"  Model size:        (not downloaded yet)")
+            try:
+                out("=" * 70)
+                out("[BG Remover] DIAGNOSTICS")
+                out("=" * 70)
+                out(f"Addon version:       {bl_info['version']}")
+                out(f"Blender version:     {bpy.app.version_string}")
+                out(f"Platform:            {platform.platform()}")
+                out(f"Python executable:   {sys.executable}")
+                out(f"Python version:      {sys.version.splitlines()[0]}")
+                out(f"User site-packages:  {site.getusersitepackages()}")
+                out(f"Addon data dir:      {_addon_data_dir()}")
+                out(f"Model file:          {_model_path()}")
+                mp = _model_path()
+                if mp.is_file():
+                    out(f"  Model size:        {mp.stat().st_size / 1024 / 1024:.1f} MB")
+                else:
+                    out(f"  Model size:        (not downloaded yet)")
 
-        out("")
-        out("sys.path entries with 'site-packages':")
-        for p in sys.path:
-            if 'site-packages' in p.lower():
-                out(f"  {p}")
+                out("")
+                out("sys.path entries with 'site-packages':")
+                for p in sys.path:
+                    if 'site-packages' in p.lower():
+                        out(f"  {p}")
 
-        out("")
-        out("Package import probes (subprocess — shows real OS loader errors):")
-        for pip_name, import_name in [("onnxruntime", "onnxruntime"),
-                                       ("numpy", "numpy"),
-                                       ("scipy", "scipy"),
-                                       ("Pillow", "PIL")]:
-            ok, msg = _probe_import_subprocess(import_name)
-            tag = "OK  " if ok else "FAIL"
-            out(f"  [{tag}] {pip_name}:")
-            for line in (msg or '').splitlines()[-8:]:
-                out(f"      {line}")
+                out("")
+                out("Package import probes (subprocess — real OS loader errors):")
+                for pip_name, import_name in [
+                        ("onnxruntime", "onnxruntime"), ("numpy", "numpy"),
+                        ("scipy", "scipy"), ("Pillow", "PIL")]:
+                    ok, msg = _probe_import_subprocess(import_name)
+                    tag = "OK  " if ok else "FAIL"
+                    out(f"  [{tag}] {pip_name}:")
+                    for line in (msg or '').splitlines()[-8:]:
+                        out(f"      {line}")
 
-        out("")
-        out("pip show (versions + install locations):")
-        try:
-            result = _run_no_window(
-                [sys.executable, '-m', 'pip', 'show', 'onnxruntime', 'numpy', 'scipy', 'Pillow'],
-                capture_output=True, text=True, timeout=30,
-            )
-            for line in (result.stdout or '').splitlines():
-                if any(line.startswith(k) for k in ('Name:', 'Version:', 'Location:')):
-                    out(f"  {line}")
-                elif line.strip() == '---':
-                    out(f"  ---")
-        except Exception as e:
-            out(f"  pip show failed: {e}")
+                out("")
+                out("pip show:")
+                try:
+                    result = _run_no_window(
+                        [sys.executable, '-m', 'pip', 'show',
+                         'onnxruntime', 'numpy', 'scipy', 'Pillow'],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    for line in (result.stdout or '').splitlines():
+                        if any(line.startswith(k) for k in ('Name:', 'Version:', 'Location:')):
+                            out(f"  {line}")
+                        elif line.strip() == '---':
+                            out(f"  ---")
+                except Exception as e:
+                    out(f"  pip show failed: {e}")
 
-        out("=" * 70)
-        out("[BG Remover] End of diagnostics.")
-        out("=" * 70)
+                out("=" * 70)
+                out("[BG Remover] End of diagnostics.")
+                out("=" * 70)
 
-        # Save to disk
-        diag_path = _diagnostics_path()
-        try:
-            with open(diag_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(lines) + '\n')
-            self.report({'INFO'}, f'Diagnostics saved: {diag_path}')
-            print(f"[BG Remover] Diagnostics also saved to: {diag_path}")
-        except Exception as e:
-            self.report({'ERROR'}, f'Could not save diagnostics: {e}')
+                diag_path = _diagnostics_path()
+                try:
+                    with open(diag_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(lines) + '\n')
+                    print(f"[BG Remover] Saved: {diag_path}")
+                except Exception as e:
+                    print(f"[BG Remover] Save failed: {e}")
+            finally:
+                _schedule_main_thread(lambda: _set_status('idle', ''))
+                # Also refresh the cache since we just did a thorough probe
+                _schedule_main_thread(lambda: _refresh_cache_thorough())
+
+        threading.Thread(target=worker, daemon=True).start()
         return {'FINISHED'}
 
 
@@ -882,37 +1106,6 @@ class BGRemover_OT_OpenDiagnostics(bpy.types.Operator):
                 subprocess.Popen(['xdg-open', str(diag_path)])
         except Exception as e:
             self.report({'ERROR'}, f'Could not open file: {e}')
-            return {'CANCELLED'}
-        return {'FINISHED'}
-
-
-class BGRemover_OT_ForceReinstallOrt(bpy.types.Operator):
-    """Force-reinstall onnxruntime at the pinned version (1.20.1).
-    Use this if the install seems broken."""
-    bl_idname = 'bgremover.force_reinstall_ort'
-    bl_label = 'Force Reinstall onnxruntime 1.20.1'
-
-    def execute(self, context):
-        global _last_error, _last_error_detail
-        _last_error = None
-        _last_error_detail = None
-        try:
-            self.report({'INFO'}, 'Uninstalling onnxruntime…')
-            _pip_uninstall('onnxruntime')
-            self.report({'INFO'}, 'Installing onnxruntime==1.20.1…')
-            ok, output = _pip_install(['--upgrade', '--force-reinstall', '--no-deps', ONNXRUNTIME_SPEC])
-            if not ok:
-                raise RuntimeError(f"Install failed:\n{output[-1500:]}")
-            # Also make sure its numpy dependency is there
-            _pip_install(['--upgrade', 'numpy'])
-            _refresh_sys_path()
-            ok, out = _probe_import_subprocess('onnxruntime')
-            if not ok:
-                raise RuntimeError(f"Still can't import onnxruntime:\n{out}")
-            self.report({'INFO'}, f'✅ onnxruntime reinstalled: {out}')
-        except Exception as e:
-            _last_error = str(e)
-            self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
         return {'FINISHED'}
 
@@ -1015,7 +1208,7 @@ class BGRemover_OT_ProcessSequence(bpy.types.Operator):
         self.report({'INFO'}, f'Processing {len(frames)} frames — watch console.')
 
         try:
-            ensure_deps()
+            ensure_deps_sync()
             from PIL import Image
             get_session()
         except Exception as e:
@@ -1081,6 +1274,19 @@ class BGRemover_OT_OpenURL(bpy.types.Operator):
 # Panel
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _status_icon():
+    """Return an appropriate icon for the current status."""
+    if _status == 'installing' or _status == 'uninstalling':
+        return 'SORTTIME'  # looks like a wait/progress icon
+    if _status == 'checking':
+        return 'VIEWZOOM'
+    if _status == 'downloading':
+        return 'IMPORT'
+    if _status == 'loading_session':
+        return 'FILE_REFRESH'
+    return 'BLANK1'
+
+
 class BGRemover_PT_Panel(bpy.types.Panel):
     bl_label = 'BG Remover'
     bl_idname = 'BGREMOVER_PT_panel'
@@ -1091,7 +1297,45 @@ class BGRemover_PT_Panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
 
-        problems = _check_packages()
+        # ── STATUS TAKES PRIORITY over everything else ───────────────────────
+        # If an operation is in progress, show that instead of stale errors
+        # or stale "setup required" boxes.
+        if _status != 'idle':
+            box = layout.box()
+            box.label(text='Working…', icon=_status_icon())
+            if _status_message:
+                # Wrap long messages by showing multiple label lines
+                msg = _status_message
+                while msg:
+                    chunk, msg = msg[:42], msg[42:]
+                    box.label(text=chunk, icon='BLANK1')
+            if _status_progress >= 0.0:
+                # Show a textual progress bar (Blender has no native one)
+                filled = int(_status_progress * 20)
+                bar = '█' * filled + '░' * (20 - filled)
+                box.label(text=f"  {bar}  {int(_status_progress * 100)}%",
+                          icon='BLANK1')
+            box.label(text='Blender stays responsive — this is a',
+                      icon='INFO')
+            box.label(text='background task.', icon='BLANK1')
+            return
+
+        # ── IDLE — show the appropriate state ───────────────────────────────
+
+        # Briefly flash success message after install completes
+        if _status_message:
+            box = layout.box()
+            box.label(text=_status_message, icon='CHECKMARK')
+
+        # Read from cache — NEVER compute in draw()
+        if not _cache_valid:
+            # First-time draw before the initial check has completed
+            box = layout.box()
+            box.label(text='Checking environment…', icon='VIEWZOOM')
+            box.label(text='One moment.', icon='BLANK1')
+            return
+
+        problems = _cached_problems or []
         missing = _missing_names(problems)
         model_exists = _model_path().is_file()
 
@@ -1101,38 +1345,39 @@ class BGRemover_PT_Panel(bpy.types.Panel):
             box.label(text='Setup required', icon='ERROR')
             box.label(text=f"Cannot import: {', '.join(missing)}")
 
-            # Show the first-line of the first failing package's actual error
             first_err_line = (problems[0][1] or '').strip().splitlines()[0][:55]
             box.label(text=first_err_line, icon='INFO')
 
             all_errs = " ".join(err for _, err in problems).lower()
-            # Detect DLL-init failure across locales (Chinese Windows returns
-            # the error message translated)
             full_err = " ".join(err for _, err in problems)
             dll_keywords = ['dll load failed', 'dynamic link library',
                             '动态链接库', '初始化例程失败']
-            is_dll_init_fail = any(k in all_errs or k in full_err for k in dll_keywords)
+            is_dll_init_fail = any(k in all_errs or k in full_err
+                                    for k in dll_keywords)
 
             if os.name == 'nt' and is_dll_init_fail:
                 vc_box = box.box()
-                vc_box.label(text='Likely cause: missing VC++ Redist', icon='INFO')
+                vc_box.label(text='Likely cause: missing VC++ Redist',
+                             icon='INFO')
                 op = vc_box.operator('bgremover.open_url',
                                      text='Install vc_redist.x64.exe',
                                      icon='URL')
                 op.url = VC_REDIST_URL
                 vc_box.label(text='Then close Blender, reopen, try again.',
                              icon='BLANK1')
-                # Offer force-reinstall as an alternative
                 vc_box.operator('bgremover.force_reinstall_ort',
                                 text='Reinstall onnxruntime 1.20.1',
                                 icon='FILE_REFRESH')
 
             row = box.row(align=True)
             row.operator('bgremover.install_deps', icon='IMPORT')
-            row.operator('bgremover.diagnostics', text='Diagnostics', icon='CONSOLE')
+            row.operator('bgremover.recheck', text='Recheck', icon='FILE_REFRESH')
+            row = box.row(align=True)
+            row.operator('bgremover.diagnostics', text='Diagnostics',
+                         icon='CONSOLE')
             if _diagnostics_path().is_file():
-                box.operator('bgremover.open_diagnostics',
-                             text='Open diagnostics.txt', icon='TEXT')
+                row.operator('bgremover.open_diagnostics',
+                             text='Open File', icon='TEXT')
             return
 
         if not model_exists:
@@ -1184,7 +1429,10 @@ class BGRemover_PT_Panel(bpy.types.Panel):
         layout.operator('bgremover.process_sequence', icon='SEQUENCE')
 
         layout.separator()
-        layout.operator('bgremover.diagnostics', icon='CONSOLE')
+        row = layout.row(align=True)
+        row.operator('bgremover.recheck', text='Recheck', icon='FILE_REFRESH')
+        row.operator('bgremover.diagnostics', text='Diagnostics',
+                     icon='CONSOLE')
         layout.operator('bgremover.clear_model', icon='TRASH')
 
 
@@ -1195,9 +1443,10 @@ class BGRemover_PT_Panel(bpy.types.Panel):
 classes = [
     BGRemoverPreferences,
     BGRemover_OT_InstallDeps,
+    BGRemover_OT_ForceReinstallOrt,
+    BGRemover_OT_Recheck,
     BGRemover_OT_Diagnostics,
     BGRemover_OT_OpenDiagnostics,
-    BGRemover_OT_ForceReinstallOrt,
     BGRemover_OT_RemoveBackground,
     BGRemover_OT_RemoveFromRender,
     BGRemover_OT_ProcessSequence,
@@ -1207,15 +1456,33 @@ classes = [
 ]
 
 
+def _initial_cache_refresh():
+    """Run a thorough check once on addon enable so the panel has
+    accurate state without needing the user to click anything."""
+    def worker():
+        try:
+            _refresh_cache_thorough()
+        finally:
+            _schedule_main_thread(lambda: _tag_ui_redraw())
+    threading.Thread(target=worker, daemon=True).start()
+    return None  # don't re-fire as a timer
+
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    # Schedule the initial package check AFTER register returns, so we don't
+    # block Blender startup. This means the panel briefly shows "Checking
+    # environment…" the first time it's drawn, then populates with real state.
+    bpy.app.timers.register(_initial_cache_refresh, first_interval=0.1)
 
 
 def unregister():
-    global _session, _session_provider
+    global _session, _session_provider, _cached_problems, _cache_valid
     _session = None
     _session_provider = None
+    _cached_problems = None
+    _cache_valid = False
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
